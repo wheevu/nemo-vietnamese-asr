@@ -1,6 +1,8 @@
 # 🎙️ End-to-End Vietnamese ASR System with NVIDIA NeMo
 
-[![NeMo](https://img.shields.io/badge/NVIDIA-NeMo-green)](https://github.com/NVIDIA/NeMo) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/) [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![NeMo](https://img.shields.io/badge/NVIDIA-NeMo-green)](https://github.com/NVIDIA/NeMo)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wheevu/nemo-vietnamese-asr/blob/main/NVIDIA_NeMo_ASR.ipynb)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 
 ## 1. Executive Summary
 
