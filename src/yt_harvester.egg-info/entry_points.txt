@@ -1,0 +1,2 @@
+[console_scripts]
+yt-harvester = yt_harvester.__main__:main
