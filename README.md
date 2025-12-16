@@ -18,6 +18,10 @@ The system follows a hybrid **Local-to-Cloud** workflow designed for scalability
 
 ![Architecture Diagram](./asset/mermaid-diagram.png)
 
+> - **Hybrid Local-to-Cloud Architecture:** Chosen to maximize resource efficiency. Computationally cheap **Data ETL** is performed on a local machine (M1 CPU), reserving expensive **Cloud GPU** time exclusively for model training and inference. This is a cost-effective and scalable pattern for MLOps.
+> - **Smart Transcript Fallback Chain:** Implemented because data quality is paramount. Prioritizing official manual transcripts over auto-generated ones ensures the highest possible fidelity for our ground-truth data, reducing "training pollution."
+> - **Audio Segmentation for Inference:** The Conformer model has a quadratic memory cost relative to audio length. By chunking audio into 30-second segments, we avoid OOM errors on T4 GPUs and can process arbitrarily long audio files with constant memory usage.
+
 ---
 
 ## 3. 📂 Project Structure
@@ -129,3 +133,18 @@ To validate the pipeline integrity, a **Zero-Shot Inference** test was performed
 
 - **Local:** `yt-dlp`, `ffmpeg`, `textblob`, `soundfile`, `pandas`
 - **Cloud:** `nemo_toolkit[all]`, `pytorch-lightning`, `jiwer`, `librosa`
+
+> ### Conclusion & Next Steps
+>
+> The pipeline is fully validated and functional for data processing. The current WER of ~1.00 confirms that a pre-trained English model cannot understand Vietnamese, as expected. The critical next phase is **Transfer Learning**.
+>
+> **Proposed Fine-Tuning Strategy:**
+>
+> 1.  **Model Selection:** Utilize a smaller, pre-trained English model like `stt_en_conformer_ctc_small` from NGC.
+> 2.  **Technique:** Freeze the robust audio **Encoder** layers and fine-tune only the language-specific **Decoder** on the new Vietnamese corpus.
+> 3.  **Hypothesis:** This approach should dramatically lower the WER in just a few epochs of training, demonstrating a viable path to creating a high-performance Vietnamese ASR model with minimal computational resources.
+>
+> **Future Work:**
+>
+> - Develop a custom Vietnamese character-based tokenizer to replace the English BPE tokenizer for improved accuracy.
+> - Perform detailed Error Analysis on the fine-tuned model to identify common phonetic failure points (e.g., tonal mistakes, loanwords).
