@@ -228,6 +228,34 @@ tests/test_data_integrity.py::TestManifestAudioLinkage::test_manifest_audio_file
 
 ---
 
+## 8. 🚀 CI/CD (GitHub Actions)
+
+This repo uses **GitHub Actions** to continuously validate code + data integrity on every change.
+
+### Workflow Overview
+
+- **Workflow file:** `.github/workflows/run_tests.yml`
+- **Triggers:** `push` and `pull_request` to `main`
+- **Runner:** `ubuntu-latest`
+- **Python:** 3.10 (via `actions/setup-python`)
+
+### What the Pipeline Does
+
+1. **Checkout** the repository
+2. **Install Linux system deps** (`libsndfile1`) so `soundfile` imports cleanly on Ubuntu
+3. **Install Python dependencies** needed for the test suite and `src/` imports
+4. **Run tests:**
+
+```bash
+pytest tests/ -v
+```
+
+### Notes
+
+- This pipeline is **CI-focused** (test + validation). It does not deploy an inference service.
+
+---
+
 ## 📦 Dependencies
 
 - **Local:** `yt-dlp`, `ffmpeg`, `textblob`, `soundfile`, `pandas`
