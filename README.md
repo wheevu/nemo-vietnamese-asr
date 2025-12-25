@@ -141,6 +141,10 @@ Validation: **Zero-Shot Offline Evaluation (Training-Time Inference)** with a pr
 
 This repo includes a production-oriented inference optimization workflow using **quantization** to reduce latency and memory footprint on **Google Colab T4** GPUs.
 
+This benchmarking + quantization workflow is adapted from concepts practiced in the **“Quantization Fundamentals with Hugging Face”** course, with an emphasis on the practical **accessibility gap**:
+- **Why:** model sizes can exceed readily available VRAM (e.g., ~280 GB FP32 weights for a 70B model vs ~80 GB on A100 and ~16 GB on T4).
+- **How:** reduce footprint by using lower-precision types (FP16 is ~2× smaller than FP32; INT8 is ~4× smaller than FP32), trading efficiency vs precision.
+
 ### Benchmarking (float32 vs float16 vs int8)
 
 The benchmark script (`benchmark.py`) measures inference latency and WER across different precision settings. It automatically:
