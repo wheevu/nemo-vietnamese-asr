@@ -1,0 +1,39 @@
+name: Run Tests
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # CRITICAL: Install Linux system library for audio processing
+      # Without this, 'import soundfile' fails on Ubuntu
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsndfile1
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install testing libraries
+          pip install pytest pytest-cov numpy soundfile
+          # Install project dependencies needed for the src code to import
+          # (Add any others your src/utils.py needs, e.g., pandas, textblob)
+          pip install pandas textblob regex pyyaml yt-dlp
+
+      - name: Run Tests with pytest
+        run: |
+          pytest tests/ -v
