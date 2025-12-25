@@ -3,7 +3,7 @@
 [![NeMo](https://img.shields.io/badge/NVIDIA-NeMo-green)](https://github.com/NVIDIA/NeMo)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wheevu/nemo-vietnamese-asr/blob/main/NVIDIA_NeMo_ASR.ipynb)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-61%20passed-brightgreen)](tests/)
+[![Run Tests](https://github.com/wheevu/nemo-vietnamese-asr/actions/workflows/run_tests.yml/badge.svg)](https://github.com/wheevu/nemo-vietnamese-asr/actions/workflows/run_tests.yml)
 
 ## 1. Executive Summary
 
