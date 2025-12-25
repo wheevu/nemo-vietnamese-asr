@@ -137,6 +137,42 @@ Validation: **Zero-Shot Offline Evaluation (Training-Time Inference)** with a pr
 
 ---
 
+## Production-Ready Model Optimization
+
+This repo includes a production-oriented inference optimization workflow using **quantization** to reduce latency and memory footprint on **Google Colab T4** GPUs.
+
+### Benchmarking (float32 vs float16 vs int8)
+
+The benchmark script (`benchmark.py`) measures inference latency and WER across different precision settings. It automatically:
+- Crops audio to 30s to avoid Conformer O(N²) OOM
+- Remaps macOS manifest paths to Colab paths
+- Handles NeMo API signature differences across versions
+- Gracefully reports int8 failures (Quanto has known incompatibilities with NeMo Conformer)
+
+**Run in Colab (Step 8B of the notebook):**
+```bash
+python benchmark.py \
+  --model "/content/drive/MyDrive/Colab Notebooks/nemo_asr_project/vietnamese_asr_v1.nemo" \
+  --manifest /content/data/test_manifest.json \
+  --samples 100 \
+  --audio-root /content/data/audio
+```
+
+**Or use an NGC pretrained model directly:**
+```bash
+python benchmark.py --model stt_en_conformer_ctc_large --manifest val_manifest.json --samples 100
+```
+
+### Results (Colab T4 GPU, Dec 2025)
+
+| Precision | Avg Latency (ms/file) | WER (%) | VRAM (MB) | Samples | Notes |
+| --- | --- | --- | --- | --- | --- |
+| float32 | 151.54 | 99.89 | 731.29 | 2 | Baseline |
+| float16 | 89.34 | 99.88 | 888.88 | 2 | **~40% faster**, recommended for T4 |
+| int8 | — | — | 166.05 | 0 | Quanto incompatible with NeMo Conformer |
+
+> **Note:** WER ~100% is expected — this is an **English** Conformer model (`stt_en_conformer_ctc_large`) evaluated on **Vietnamese** audio without fine-tuning. The benchmark validates the pipeline, not the model's Vietnamese accuracy.
+
 ## 📦 Dependencies
 
 - **Local:** `yt-dlp`, `ffmpeg`, `textblob`, `soundfile`, `pandas`

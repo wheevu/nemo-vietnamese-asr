@@ -1,3 +1,9 @@
 yt-dlp
 youtube-transcript-api
 soundfile
+
+# ASR benchmarking
+jiwer
+
+# Quantization
+quanto==0.0.11
