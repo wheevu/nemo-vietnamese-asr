@@ -3,6 +3,7 @@
 [![NeMo](https://img.shields.io/badge/NVIDIA-NeMo-green)](https://github.com/NVIDIA/NeMo)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wheevu/nemo-vietnamese-asr/blob/main/NVIDIA_NeMo_ASR.ipynb)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-61%20passed-brightgreen)](tests/)
 
 ## 1. Executive Summary
 
@@ -10,7 +11,7 @@ This repository focuses on **data ingestion + preparation** for Vietnamese ASR a
 
 Aligned with NVIDIA’s production mental model, **training and inference serving are separate systems**: training produces model artifacts; inference is delivered via a **GPU-accelerated inference endpoint** across a clear service boundary. This repo covers dataset creation, training, and training-time inference / offline evaluation; production inference serving (e.g., Riva / NIM-style microservices) is intentionally out of scope.
 
-This separation-of-concerns framing is informed by the architectural vocabulary and serving mental model emphasized in **NVIDIA’s NIM Microservices coursework.**
+This separation-of-concerns framing is informed by the architectural vocabulary and serving mental model emphasized in **[NVIDIA’s NIM Microservices coursework](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-FX-23+V1).**
 
 The design also supports a common constraint: develop on **Apple Silicon (M1)**, train on **Linux/CUDA** GPUs (dependencies, cross-platform paths, and data validation).
 
@@ -58,7 +59,12 @@ nemo-vietnamese-asr/
 │       ├── downloader.py       # YouTube data fetching logic
 │       ├── processor.py        # Text analysis (sentiment, keywords)
 │       └── utils.py            # Helper functions
+├── tests/                      # 🧪 pytest test suite
+│   ├── conftest.py             # Shared fixtures (mock audio, manifests)
+│   ├── test_text_processing.py # URL parsing, Vietnamese text normalization
+│   └── test_data_integrity.py  # Manifest validation, audio compliance
 ├── prepare_data.py             # ⚙️ NeMo manifest generator & validator
+├── benchmark.py                # 📊 Precision benchmarking (FP32/FP16/INT8)
 ├── audio/                      # Output: 16kHz mono WAV files
 ├── transcripts/                # Output: Clean raw transcript text
 ├── structured_outputs/         # Output: Full metadata + analysis
@@ -141,7 +147,7 @@ Validation: **Zero-Shot Offline Evaluation (Training-Time Inference)** with a pr
 
 This repo includes a production-oriented inference optimization workflow using **quantization** to reduce latency and memory footprint on **Google Colab T4** GPUs.
 
-This benchmarking + quantization workflow is adapted from concepts practiced in the **“Quantization Fundamentals with Hugging Face”** course, with an emphasis on the practical **accessibility gap**:
+This benchmarking + quantization workflow is adapted from concepts practiced in the **[“Quantization Fundamentals with Hugging Face”](https://www.deeplearning.ai/short-courses/quantization-fundamentals-with-hugging-face/)** course, with an emphasis on the practical **accessibility gap**:
 - **Why:** model sizes can exceed readily available VRAM (e.g., ~280 GB FP32 weights for a 70B model vs ~80 GB on A100 and ~16 GB on T4).
 - **How:** reduce footprint by using lower-precision types (FP16 is ~2× smaller than FP32; INT8 is ~4× smaller than FP32), trading efficiency vs precision.
 
@@ -177,10 +183,56 @@ python benchmark.py --model stt_en_conformer_ctc_large --manifest val_manifest.j
 
 > **Note:** WER ~100% is expected — this is an **English** Conformer model (`stt_en_conformer_ctc_large`) evaluated on **Vietnamese** audio without fine-tuning. The benchmark validates the pipeline, not the model's Vietnamese accuracy.
 
+---
+
+## 7. 🧪 Testing
+
+This project includes a professional test suite following best practices from **["Testing Machine Learning Systems: Code, Data and Models" by Made With ML](https://madewithml.com/courses/mlops/testing/)**. The tests validate both code correctness and data integrity — critical for ML pipelines where silent data issues cause training failures.
+
+### Test Categories
+
+| Category | File | Tests | Purpose |
+| :------- | :--- | :---: | :------ |
+| **Text Processing** | `test_text_processing.py` | 42 | YouTube URL parsing, Vietnamese text normalization, diacritic preservation |
+| **Data Integrity** | `test_data_integrity.py` | 19 | NeMo manifest schema, 16kHz mono WAV compliance, file linkage |
+
+### Key Testing Principles Applied
+
+- **Fail Fast:** Catch data issues during preparation, not during expensive GPU training
+- **Fixture-Based:** Reusable mock audio files and manifests via `conftest.py`
+- **Negative Testing:** Verify validation catches invalid formats (stereo audio, wrong sample rate)
+- **Vietnamese-Specific:** Tests ensure diacritics are preserved (e.g., "Việt" not corrupted to "Viet")
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage report
+pytest tests/ --cov=src --cov-report=term-missing
+
+# Run specific test category
+pytest tests/test_data_integrity.py -v
+```
+
+### Sample Test Output
+
+```
+tests/test_text_processing.py::TestVideoIdFromUrl::test_valid_url_formats[...] PASSED
+tests/test_text_processing.py::TestCleanCaptionLines::test_vietnamese_diacritics_preserved PASSED
+tests/test_data_integrity.py::TestAudioFormatCompliance::test_audio_sample_rate_is_16khz PASSED
+tests/test_data_integrity.py::TestManifestAudioLinkage::test_manifest_audio_files_exist PASSED
+========================= 61 passed in 0.34s =========================
+```
+
+---
+
 ## 📦 Dependencies
 
 - **Local:** `yt-dlp`, `ffmpeg`, `textblob`, `soundfile`, `pandas`
 - **Cloud:** `nemo_toolkit[all]`, `pytorch-lightning`, `jiwer`, `librosa`
+- **Testing:** `pytest`, `pytest-cov`, `numpy`, `soundfile`
 
 > ### Conclusion & Next Steps
 >

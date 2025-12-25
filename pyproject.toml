@@ -38,7 +38,48 @@ dependencies = [
 # It will execute the main() function from yt_harvester/__main__.py
 yt-harvester = "yt_harvester.__main__:main"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "numpy>=1.21.0",
+    "soundfile>=0.12.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/yourusername/yt-harvester"
 Repository = "https://github.com/yourusername/yt-harvester.git"
 Issues = "https://github.com/yourusername/yt-harvester/issues"
+
+# =============================================================================
+# Pytest Configuration
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+python_classes = "Test*"
+addopts = "-v --disable-warnings --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

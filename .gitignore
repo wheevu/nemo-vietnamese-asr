@@ -14,5 +14,11 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# Ignore test/coverage artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
 # Ignore the typo folder just in case
 sctructured_outputs/
