@@ -1,4 +1,4 @@
-# 🎙️ End-to-End Vietnamese ASR System with NVIDIA NeMo
+# 🎙️ End-to-End Vietnamese ASR Pipeline with NVIDIA NeMo
 
 [![NeMo](https://img.shields.io/badge/NVIDIA-NeMo-green)](https://github.com/NVIDIA/NeMo)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wheevu/nemo-vietnamese-asr/blob/main/NVIDIA_NeMo_ASR.ipynb)
@@ -6,21 +6,42 @@
 
 ## 1. Executive Summary
 
-This project implements a complete **MLOps and Data Engineering pipeline** for Automatic Speech Recognition (ASR), specifically targeting low-resource languages (Vietnamese). The system automates the ingestion of unstructured audio-visual data from YouTube, performs ETL (Extract, Transform, Load) operations to create a clean speech corpus, and leverages cloud-based GPU infrastructure to deploy and evaluate enterprise-grade **Conformer-CTC** models using the **NVIDIA NeMo** framework.
+This repository focuses on **data ingestion + preparation** for Vietnamese ASR and **GPU training / offline evaluation** with **NVIDIA NeMo**. It harvests unstructured YouTube audio/video, runs ETL to produce a clean speech corpus, and generates NeMo-compatible manifests for reproducible training.
 
-The architecture solves the specific challenge of bridging a local **Apple Silicon (M1)** development environment with **Linux/CUDA** cloud training infrastructure, handling dependency management, cross-platform pathing, and robust data validation.
+Aligned with NVIDIA’s production mental model, **training and inference serving are separate systems**: training produces model artifacts; inference is delivered via a **GPU-accelerated inference endpoint** across a clear service boundary. This repo covers dataset creation, training, and training-time inference / offline evaluation; production inference serving (e.g., Riva / NIM-style microservices) is intentionally out of scope.
+
+This separation-of-concerns framing is informed by the architectural vocabulary and serving mental model emphasized in **NVIDIA’s NIM Microservices coursework.**
+
+The design also supports a common constraint: develop on **Apple Silicon (M1)**, train on **Linux/CUDA** GPUs (dependencies, cross-platform paths, and data validation).
 
 ---
 
 ## 2. System Architecture
 
-The system follows a hybrid **Local-to-Cloud** workflow designed for scalability and reproducibility.
+Hybrid **Local-to-Cloud** workflow optimized for reproducibility and cost.
 
 ![Architecture Diagram](./asset/mermaid-diagram.png)
 
-> - **Hybrid Local-to-Cloud Architecture:** Chosen to maximize resource efficiency. Computationally cheap **Data ETL** is performed on a local machine (M1 CPU), reserving expensive **Cloud GPU** time exclusively for model training and inference. This is a cost-effective and scalable pattern for MLOps.
-> - **Smart Transcript Fallback Chain:** Implemented because data quality is paramount. Prioritizing official manual transcripts over auto-generated ones ensures the highest possible fidelity for our ground-truth data, reducing "training pollution."
-> - **Audio Segmentation for Inference:** The Conformer model has a quadratic memory cost relative to audio length. By chunking audio into 30-second segments, we avoid OOM errors on T4 GPUs and can process arbitrarily long audio files with constant memory usage.
+> - **Local CPU ETL, Cloud GPU training:** Run cheap ETL locally (M1 CPU); reserve paid GPU time for training and **training-time inference / offline evaluation**.
+> - **Transcript quality fallback:** Prefer manual transcripts over auto-generated sources to reduce noisy labels (“training pollution”).
+> - **Segmented evaluation:** Chunk audio into 30s windows to avoid Conformer’s $O(N^2)$ attention memory blowups and prevent OOM on T4 GPUs.
+
+### Production-Oriented View
+
+- ASR inference is a **separate service**: a model sits behind an **inference endpoint**; this repo does not implement serving.
+- Enforce a **service boundary**: data prep outputs versioned artifacts (audio, transcripts, manifests); training outputs versioned artifacts (checkpoints/configs) for downstream serving systems.
+- Training artifacts are intentionally **runtime-agnostic**: produced for downstream serving, but not coupled to any specific serving runtime.
+- **Offline data prep (local CPU):** `src/yt_harvester` handles ingestion + ETL, transcript fallback, and 16kHz mono WAV standardization.
+- **GPU training (NeMo):** run training on Linux/CUDA GPUs; evaluation here is **training-time inference / offline evaluation** (batch transcription + WER).
+- **Decoupled training and serving:** training optimizes for experimentation/throughput; serving optimizes for latency/concurrency/operations.
+- **Client–service interaction (future):** integrate via a request/response contract (audio → transcript), aligning with a future inference service / serving layer.
+
+### Scope & Non-Goals
+
+- No production inference serving (no deployed ASR endpoint / online API).
+- No container runtime or orchestration included.
+- “Inference” here means **training-time inference / offline evaluation**, not serving.
+- Goal: correct architecture (training ≠ serving) and forward-compatible artifacts for a GPU-backed serving stack.
 
 ---
 
@@ -42,14 +63,14 @@ nemo-vietnamese-asr/
 ├── transcripts/                # Output: Clean raw transcript text
 ├── structured_outputs/         # Output: Full metadata + analysis
 ├── train_manifest.json         # NeMo training manifest
-└── NVIDIA_NeMo_ASR.ipynb       # ☁️ Cloud Notebook (Training/Inference)
+└── NVIDIA_NeMo_ASR.ipynb       # ☁️ Cloud Notebook (Training/Offline Evaluation)
 ```
 
 ---
 
 ## 4. 🛠️ Component 1: Local Data Engineering
 
-The local engine (`src/yt_harvester`) is responsible for the **Extraction** and **Transformation** phases. It turns raw YouTube videos into structured datasets.
+The local engine (`src/yt_harvester`) covers **Extraction** + **Transformation**, turning raw YouTube videos into a structured speech dataset.
 
 ### Core Features
 
@@ -57,7 +78,7 @@ The local engine (`src/yt_harvester`) is responsible for the **Extraction** and 
   1.  Official Manual Transcripts (Vi/En)
   2.  Auto-Generated API Transcripts
   3.  Auto-Captions via `yt-dlp` CLI
-- **Audio Standardization:** Automatically converts streams to **16kHz Mono WAV** (ASR Industry Standard) using FFmpeg post-processors.
+- **Audio Standardization:** Converts streams to **16kHz mono WAV** via FFmpeg post-processing.
 - **Idempotency:** Checks for existing files before downloading to save bandwidth and enable safe re-runs.
 - **Rich Metadata:** Extracts sentiment polarity and top keywords using `TextBlob` for potential future downstream tasks.
 
@@ -76,11 +97,11 @@ python prepare_data.py
 
 ### Manifest Generation Strategy (`prepare_data.py`)
 
-This script acts as the **Validation Layer** before the cloud.
+This script is the **validation layer** before training.
 
-- **Integrity Check:** Scans all `.wav` files and cross-references them with `.txt` transcripts. If a transcript is missing or empty, the audio is automatically discarded to prevent training pollution.
-- **Normalization:** Lowercases text and removes punctuation to match the CTC decoder's alphabet.
-- **Splitting:** Performs a randomized 80/10/10 split for Train/Val/Test sets.
+- **Integrity:** Cross-check `.wav` and `.txt`; discard missing/empty transcripts to prevent label noise.
+- **Normalization:** Lowercase + remove punctuation to match the CTC decoder alphabet.
+- **Split:** Randomized 80/10/10 Train/Val/Test.
 
 ---
 
@@ -88,44 +109,31 @@ This script acts as the **Validation Layer** before the cloud.
 
 **File:** `NVIDIA_NeMo_ASR_Training.ipynb`
 
-This component handles **Model Loading, Inference, and Evaluation** using NVIDIA GPUs.
+This component handles **model loading** plus **training-time inference / offline evaluation** on NVIDIA GPUs.
 
 ### Workflow Logic
 
-1.  **Persistence Layer:**
-
-    - Mounts Google Drive to act as a persistent file system.
-    - Unzips the dataset from Drive to the local Colab VM disk (`/content/data`) for high-speed I/O access.
-
-2.  **Model Loading (Universal Fix):**
-
-    - Utilizes the polymorphic `ASRModel` class to load `stt_en_conformer_ctc_large` directly from the **NVIDIA NGC Catalog**. This resolves BPE vs. Char-based class mismatch errors encountered with older API methods.
-
-3.  **Dynamic Path Bridging:**
-
-    - The manifest files created on macOS contain paths like `/Users/josh/...`.
-    - The notebook implements dynamic path correction logic to remap these to `/content/data/...` at runtime, enabling seamless cross-platform usage without rewriting files.
-
-4.  **Inference Pipeline:**
-    - **Segmentation:** Loads audio in 30-second chunks to avoid the $O(N^2)$ memory cost of Conformer self-attention, preventing OOM errors on the T4 GPU.
-    - **Robust Decoding:** Adapts to NeMo v2.6.0 API signatures (`paths2audio_files` vs positional arguments) via try-catch blocks.
+1.  **Persistence:** mount Drive; unzip to local VM disk (`/content/data`) for fast I/O.
+2.  **Model loading:** use NeMo’s polymorphic `ASRModel` to load `stt_en_conformer_ctc_large` from the **NVIDIA NGC Catalog** (avoids BPE vs char-class mismatch issues).
+3.  **Path bridging:** remap macOS manifest paths (e.g., `/Users/josh/...`) to Colab paths (`/content/data/...`) at runtime.
+4.  **Offline evaluation pipeline:** 30s chunking to prevent T4 OOM from Conformer’s $O(N^2)$ attention; decoding guarded for NeMo v2.6.0 signature changes (`paths2audio_files` vs positional args).
 
 ---
 
 ## 6. 📊 Results & Evaluation
 
-To validate the pipeline integrity, a **Zero-Shot Inference** test was performed using the pre-trained English Conformer model on the Vietnamese dataset.
+Validation: **Zero-Shot Offline Evaluation (Training-Time Inference)** with a pre-trained English Conformer on the Vietnamese dataset.
 
-- **Metric:** Word Error Rate (WER) calculated via `jiwer`.
-- **Quantitative Result:** WER ≈ 1.00 (Expected for Zero-Shot English-on-Vietnamese).
-- **Qualitative Analysis:** The model successfully demonstrated **Phonetic Mapping**, proving the neural network processed the acoustic features correctly.
+- **Metric:** WER via `jiwer`.
+- **Result:** WER ≈ 1.00 (expected for English-on-Vietnamese, zero-shot).
+- **Qualitative:** Shows **phonetic mapping** (acoustic features are processed sensibly).
 
 | Original Vietnamese Audio | Model Transcription (English Phonetics) | Analysis                       |
 | :------------------------ | :-------------------------------------- | :----------------------------- |
 | **"Giang Ơi Radio"**      | _"the radio"_                           | ✅ Recognized English loanword |
 | **"Chào bạn"**            | _"ta bak"_                              | ✅ Acoustic approximation      |
 
-**Conclusion:** The pipeline is fully functional and ready for Transfer Learning (Fine-Tuning) by freezing the encoder and retraining the decoder on the Vietnamese corpus.
+**Conclusion:** The pipeline is ready for transfer learning (fine-tuning): freeze the encoder and retrain the decoder on Vietnamese.
 
 ---
 
@@ -136,13 +144,13 @@ To validate the pipeline integrity, a **Zero-Shot Inference** test was performed
 
 > ### Conclusion & Next Steps
 >
-> The pipeline is fully validated and functional for data processing. The current WER of ~1.00 confirms that a pre-trained English model cannot understand Vietnamese, as expected. The critical next phase is **Transfer Learning**.
+> Data processing is validated. WER ~1.00 matches the expected zero-shot failure mode (English model on Vietnamese). Next: **transfer learning**.
 >
 > **Proposed Fine-Tuning Strategy:**
 >
 > 1.  **Model Selection:** Utilize a smaller, pre-trained English model like `stt_en_conformer_ctc_small` from NGC.
-> 2.  **Technique:** Freeze the robust audio **Encoder** layers and fine-tune only the language-specific **Decoder** on the new Vietnamese corpus.
-> 3.  **Hypothesis:** This approach should dramatically lower the WER in just a few epochs of training, demonstrating a viable path to creating a high-performance Vietnamese ASR model with minimal computational resources.
+> 2.  **Technique:** Freeze the audio **encoder** and fine-tune the language-specific **decoder** on the Vietnamese corpus.
+> 3.  **Expectation:** Lower WER within a few epochs, demonstrating a practical path to Vietnamese ASR with modest compute.
 >
 > **Future Work:**
 >
