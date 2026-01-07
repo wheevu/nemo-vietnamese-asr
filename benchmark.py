@@ -23,6 +23,17 @@ from src.model_utils import apply_quantization, get_default_device, load_nemo_mo
 
 
 def _require_torch():
+    """Import guard for optional PyTorch dependency.
+
+    Why: benchmarking runs in GPU environments (e.g., Colab). When torch isn't
+    installed, we want a clear error message.
+
+    Returns:
+        The imported `torch` module.
+
+    Raises:
+        ModuleNotFoundError: If torch is not installed.
+    """
     if torch is None:  # pragma: no cover
         raise ModuleNotFoundError(
             "PyTorch is required to run benchmark.py. "
@@ -38,7 +49,15 @@ class ManifestSample:
 
 
 def read_manifest_samples(manifest_path: str, limit: int) -> List[ManifestSample]:
-    """Read up to `limit` samples from a NeMo-style JSONL manifest."""
+    """Read samples from a NeMo-style JSONL manifest.
+
+    Args:
+        manifest_path: Path to a JSONL manifest (one JSON per line).
+        limit: Maximum number of samples to return.
+
+    Returns:
+        A list of `ManifestSample` objects (may be shorter than `limit`).
+    """
 
     samples: List[ManifestSample] = []
     with open(manifest_path, "r", encoding="utf-8") as f:
@@ -57,13 +76,31 @@ def read_manifest_samples(manifest_path: str, limit: int) -> List[ManifestSample
 
 
 def normalize_text(text: str) -> str:
-    """Light normalization suitable for WER without destroying Vietnamese diacritics."""
+    """Normalize text for WER computation without damaging Vietnamese text.
+
+    Why: WER comparisons are very sensitive to whitespace/case noise. We do a
+    gentle normalization that keeps diacritics and most symbols.
+
+    Args:
+        text: Input string.
+
+    Returns:
+        Lowercased, whitespace-normalized string.
+    """
 
     return " ".join((text or "").strip().lower().split())
 
 
 def compute_wer_percent(references: Sequence[str], hypotheses: Sequence[str]) -> float:
-    """Compute WER (%) on paired reference/hypothesis strings."""
+    """Compute word error rate (WER) as a percentage.
+
+    Args:
+        references: Ground-truth reference transcripts.
+        hypotheses: Model predicted transcripts.
+
+    Returns:
+        WER as a percentage (0–100+).
+    """
 
     import jiwer
 
@@ -87,6 +124,14 @@ def serialized_state_dict_size_mb(model) -> float:
 
 
 def cuda_sync_if_needed(device: "torch_types.device") -> None:
+    """Synchronize CUDA if the device is GPU.
+
+    Why: accurate latency measurements on GPU require synchronizing before/after
+    timing to avoid async kernel overlap.
+
+    Args:
+        device: Torch device in use.
+    """
     _torch = _require_torch()
     if device.type == "cuda":
         _torch.cuda.synchronize()
@@ -179,6 +224,18 @@ def prepare_audio_for_benchmark(path: str) -> str:
 def collect_existing_pairs(
     samples: Sequence[ManifestSample], audio_root: Optional[str]
 ) -> Tuple[List[str], List[str]]:
+    """Collect valid audio paths and matching reference texts.
+
+    Why: manifests often contain absolute paths from another machine (macOS vs
+    Colab). We remap when needed and skip missing/unreadable files.
+
+    Args:
+        samples: Manifest samples to consider.
+        audio_root: Optional folder to remap by basename when paths don't exist.
+
+    Returns:
+        Tuple `(audio_paths, references)` with aligned indices.
+    """
     audio_paths: List[str] = []
     references: List[str] = []
 
@@ -208,6 +265,24 @@ def benchmark_one_precision(
     device: "torch_types.device",
     audio_root: Optional[str],
 ) -> Dict[str, object]:
+    """Benchmark one precision mode (float32/float16/int8).
+
+    Why: we want latency, memory footprint, and WER under different precision
+    settings, using a consistent evaluation path.
+
+    Args:
+        model_ref: Local `.nemo` path or NGC model name.
+        manifest_path: JSONL manifest path.
+        precision: Precision mode (`float32`, `float16`, or `int8`).
+        sample_limit: Maximum number of manifest entries to evaluate.
+        batch_size: Batch size passed to NeMo transcribe.
+        warmup_runs: Number of warmup batches to run before timing.
+        device: Torch device to run on.
+        audio_root: Optional root directory to remap audio paths.
+
+    Returns:
+        A dict of benchmark results (keys match README table columns).
+    """
     _torch = _require_torch()
     # Reload model each time to avoid state leakage.
     try:
@@ -303,6 +378,14 @@ def benchmark_one_precision(
 
 
 def results_to_markdown_table(rows: List[Dict[str, object]]) -> str:
+    """Render benchmark rows as a Markdown table.
+
+    Args:
+        rows: List of result dicts.
+
+    Returns:
+        Markdown table string suitable for README.
+    """
     cols = ["Precision", "Avg Latency (ms/file)", "WER (%)", "VRAM/Size (MB)", "Samples"]
     header = "| " + " | ".join(cols) + " |"
     sep = "| " + " | ".join(["---"] * len(cols)) + " |"
@@ -311,6 +394,11 @@ def results_to_markdown_table(rows: List[Dict[str, object]]) -> str:
 
 
 def main() -> int:
+    """Script entry point.
+
+    Returns:
+        Exit code (0 for success).
+    """
     _require_torch()
     parser = argparse.ArgumentParser(description="Benchmark NeMo ASR quantization precisions.")
     parser.add_argument(

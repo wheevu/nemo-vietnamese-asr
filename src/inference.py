@@ -10,6 +10,17 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def _require_torch():
+    """Import guard for optional PyTorch dependency.
+
+    Why: data-prep parts of this repo can run without torch. We only require
+    torch when doing transcription/benchmarking.
+
+    Returns:
+        The imported `torch` module.
+
+    Raises:
+        ModuleNotFoundError: If torch is not installed.
+    """
     if torch is None:  # pragma: no cover
         raise ModuleNotFoundError(
             "PyTorch is required for ASR transcription. "
@@ -19,12 +30,18 @@ def _require_torch():
 
 
 def transcribe_audio(model, audio_files: Sequence[str], batch_size: int = 1) -> List[str]:
-    """Transcribe a list of audio files using a NeMo ASR model.
+    """Transcribe audio files using a NeMo ASR model.
 
-    Uses NeMo's built-in `model.transcribe`. NeMo versions differ in the method
-    signature; we try keyword args first and fall back to positional.
+    Why this wrapper exists: NeMo has changed the `transcribe()` signature across
+    versions. We inspect the callable and dispatch in a compatible way.
 
-    The model should already be moved to the intended device.
+    Args:
+        model: A NeMo ASR model instance with a `transcribe` method.
+        audio_files: Sequence of audio file paths.
+        batch_size: Batch size passed to NeMo (default: 1).
+
+    Returns:
+        List of transcription strings, one per input audio file.
     """
 
     if not audio_files:

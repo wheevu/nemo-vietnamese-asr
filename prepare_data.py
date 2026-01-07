@@ -31,10 +31,16 @@ TEST_RATIO = 0.1
 
 
 def normalize_text(text: str) -> str:
-    """
-    Normalize transcript text:
-    - Convert to lowercase
-    - Remove all punctuation except apostrophes
+    """Normalize transcript text for training.
+
+    Why: NeMo CTC training is sensitive to label noise. This normalization keeps
+    the content but removes punctuation differences and normalizes whitespace.
+
+    Args:
+        text: Raw transcript text.
+
+    Returns:
+        Normalized text (lowercase, punctuation removed except apostrophes).
     """
     # Convert to lowercase
     text = text.lower()
@@ -51,16 +57,28 @@ def normalize_text(text: str) -> str:
 
 
 def get_audio_duration(audio_path: Path) -> float:
-    """Get the duration of an audio file in seconds using soundfile."""
+    """Compute audio duration (seconds) using `soundfile`.
+
+    Args:
+        audio_path: Path to a WAV file.
+
+    Returns:
+        Duration in seconds.
+    """
     with sf.SoundFile(audio_path) as audio:
         duration = len(audio) / audio.samplerate
     return duration
 
 
 def create_master_list() -> list:
-    """
-    Create a master list of all valid data samples.
-    Each sample is a dict with: audio_filepath, duration, text
+    """Build a list of valid training samples from local artifacts.
+
+    Why: we validate upfront so GPU training doesn't fail later due to missing
+    files, empty transcripts, or unreadable audio.
+
+    Returns:
+        List of sample dicts with keys: `audio_filepath` (absolute path),
+        `duration` (seconds), and `text` (normalized transcript).
     """
     master_list = []
     
@@ -129,9 +147,13 @@ def create_master_list() -> list:
 
 
 def split_data(master_list: list) -> tuple:
-    """
-    Split the master list into train, validation, and test sets.
-    Returns (train_set, val_set, test_set)
+    """Split samples into train/val/test partitions.
+
+    Args:
+        master_list: Shuffled list of sample dicts.
+
+    Returns:
+        Tuple `(train_set, val_set, test_set)`.
     """
     total = len(master_list)
     
@@ -146,9 +168,14 @@ def split_data(master_list: list) -> tuple:
 
 
 def write_manifest(data: list, filepath: str) -> None:
-    """
-    Write data to a manifest file in NeMo format.
-    Each entry is a JSON object on a new line (JSONL format).
+    """Write a NeMo JSONL manifest to disk.
+
+    Why JSONL: NeMo expects one JSON object per line for streaming-friendly
+    loading.
+
+    Args:
+        data: List of manifest entries.
+        filepath: Output file path.
     """
     with open(filepath, "w", encoding="utf-8") as f:
         for entry in data:
@@ -159,6 +186,11 @@ def write_manifest(data: list, filepath: str) -> None:
 
 
 def main():
+    """Script entry point.
+
+    Returns:
+        Exit code (0 for success, non-zero for failure).
+    """
     print("=" * 60)
     print("NeMo ASR Data Preparation Script")
     print("=" * 60)

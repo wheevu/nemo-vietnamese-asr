@@ -1,14 +1,29 @@
-import sys
+"""Orchestration entry point for `yt_harvester`.
+
+This module keeps “what happens” obvious by splitting the pipeline into small
+steps (metadata → transcript → audio → comments → analysis → save).
+"""
+
+from __future__ import annotations
+
 import json
-from pathlib import Path
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
 from tqdm import tqdm
 
 from .cli import parse_args
-from .config import load_config
-from .utils import video_id_from_url, build_watch_url, cleanup_sidecar_files, format_like_count, format_timestamp
-from .downloader import fetch_metadata, fetch_transcript, fetch_comments, download_audio
+from .downloader import download_audio, fetch_comments, fetch_metadata, fetch_transcript
 from .processor import analyze_sentiment, extract_keywords
+from .utils import (
+    build_watch_url,
+    cleanup_sidecar_files,
+    format_like_count,
+    format_timestamp,
+    video_id_from_url,
+)
 
 # Default output directories
 DEFAULT_AUDIO_DIR = Path("./audio")
@@ -31,8 +46,17 @@ ________________________________________________________________________________
 """.strip("\n")
 
 def format_comments_for_txt(structured_comments):
-    """
-    Format structured comment data into text lines for display.
+    """Format structured comments into readable text lines.
+
+    This is used only for the `.txt` structured output to make nested replies
+    easy to scan in a plain text file.
+
+    Args:
+        structured_comments: List of comment dictionaries. Each dict may include
+            `author`, `text`, `like_count`, `timestamp`, and `replies`.
+
+    Returns:
+        A list of formatted lines (no trailing blank line).
     """
     if not structured_comments:
         return ["(No comments found.)"]
@@ -77,6 +101,22 @@ def format_comments_for_txt(structured_comments):
     return rendered_threads if rendered_threads else ["(No comments found.)"]
 
 def save_txt(output_path, meta, transcript, comments, sentiment=None, keywords=None):
+    """Write a human-readable structured report to disk.
+
+    The text format is meant for quick inspection: metadata + optional analysis
+    + transcript + comments.
+
+    Args:
+        output_path: Destination path for the `.txt` report.
+        meta: Video metadata dictionary.
+        transcript: Transcript lines (already cleaned/merged).
+        comments: Formatted comment lines (already rendered for text output).
+        sentiment: Optional sentiment payload from `analyze_sentiment`.
+        keywords: Optional keyword list from `extract_keywords`.
+
+    Returns:
+        The same `output_path` for convenience.
+    """
     transcript_lines = transcript or ["(Transcript unavailable.)"]
     comment_lines = comments or ["(Comments unavailable.)"]
 
@@ -108,6 +148,22 @@ def save_txt(output_path, meta, transcript, comments, sentiment=None, keywords=N
     return output_path
 
 def save_json(output_path, meta, transcript, comments, sentiment=None, keywords=None):
+    """Write a machine-readable structured report to disk (JSON).
+
+    JSON is easier to post-process or load into downstream pipelines than the
+    text format.
+
+    Args:
+        output_path: Destination path for the `.json` report.
+        meta: Video metadata dictionary.
+        transcript: Transcript lines (already cleaned/merged).
+        comments: Structured comments (list of dicts with optional replies).
+        sentiment: Optional sentiment payload from `analyze_sentiment`.
+        keywords: Optional keyword list from `extract_keywords`.
+
+    Returns:
+        The same `output_path` for convenience.
+    """
     full_data = {
         "metadata": meta,
         "analysis": {
@@ -123,9 +179,18 @@ def save_json(output_path, meta, transcript, comments, sentiment=None, keywords=
 
 
 def save_raw_transcript(output_path: Path, transcript: list) -> Path:
-    """
-    Save only the raw transcript text to a file.
-    Each transcript segment is joined with newlines.
+    """Write the raw transcript text to disk.
+
+    This produces the `transcripts/VIDEO_ID.txt` file used for ASR training.
+    We also filter out placeholder “(Transcript unavailable …)” lines so they
+    don't pollute training labels.
+
+    Args:
+        output_path: Destination path for the transcript file.
+        transcript: Transcript lines (strings).
+
+    Returns:
+        The saved transcript path.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -140,7 +205,144 @@ def save_raw_transcript(output_path: Path, transcript: list) -> Path:
     
     return output_path
 
+
+def _resolve_output_dirs(args, bulk_base_dir: Optional[Path]) -> Tuple[Path, Path, Path]:
+    """Compute output directories for this run.
+
+    Why: bulk runs want a single base folder with consistent subfolders,
+    while single-video runs respect the explicit `--audio-dir/--structured-dir/...`
+    flags.
+
+    Args:
+        args: Parsed CLI args.
+        bulk_base_dir: Optional base directory for bulk output.
+
+    Returns:
+        Tuple of `(audio_dir, structured_dir, transcripts_dir)`.
+    """
+
+    if bulk_base_dir:
+        return (
+            bulk_base_dir / "audio",
+            bulk_base_dir / "structured_outputs",
+            bulk_base_dir / "transcripts",
+        )
+
+    return (
+        Path(getattr(args, "audio_dir", DEFAULT_AUDIO_DIR)),
+        Path(getattr(args, "structured_dir", DEFAULT_STRUCTURED_DIR)),
+        Path(getattr(args, "transcripts_dir", DEFAULT_TRANSCRIPTS_DIR)),
+    )
+
+
+def _ensure_dirs(*dirs: Path) -> None:
+    """Create output directories if missing.
+
+    Args:
+        *dirs: One or more directory paths.
+    """
+
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+
+def _analyze_text(
+    args, transcript_lines: Sequence[str]
+) -> Tuple[Optional[Dict[str, float]], Optional[List[str]]]:
+    """Run optional analysis (sentiment and/or keywords).
+
+    Why: analysis is helpful for exploration, but it should never block the core
+    ETL pipeline, so we keep this “best-effort” and optional via CLI flags.
+
+    Args:
+        args: Parsed CLI args (flags can disable analysis).
+        transcript_lines: Transcript lines to analyze.
+
+    Returns:
+        `(sentiment, keywords)` where each value may be None when disabled.
+    """
+
+    full_text = " ".join(transcript_lines)
+    sentiment = None if getattr(args, "no_sentiment", False) else analyze_sentiment(full_text)
+    keywords = None if getattr(args, "no_keywords", False) else extract_keywords(full_text)
+    return sentiment, keywords
+
+
+def _save_outputs(
+    *,
+    args,
+    video_id: str,
+    structured_path: Path,
+    transcript_path: Path,
+    metadata: Dict[str, object],
+    transcript: List[str],
+    comments: List[dict],
+    sentiment: Optional[Dict[str, float]],
+    keywords: Optional[List[str]],
+) -> None:
+    """Write outputs to disk and clean up temporary sidecar files.
+
+    Why cleanup exists: `yt-dlp` writes metadata and caption files into the
+    current working directory. Removing them keeps re-runs tidy and prevents
+    accidental mixing of artifacts across videos.
+
+    Args:
+        args: Parsed CLI args (controls output format).
+        video_id: YouTube video ID (used for filenames and cleanup patterns).
+        structured_path: Destination path for structured output (txt/json).
+        transcript_path: Destination path for raw transcript output.
+        metadata: Video metadata dictionary.
+        transcript: Transcript lines.
+        comments: Structured comment data.
+        sentiment: Optional sentiment payload.
+        keywords: Optional keyword list.
+    """
+
+    if getattr(args, "format", "txt") == "json":
+        save_json(structured_path, metadata, transcript, comments, sentiment, keywords)
+    else:
+        formatted_comments = format_comments_for_txt(comments)
+        save_txt(structured_path, metadata, transcript, formatted_comments, sentiment, keywords)
+
+    save_raw_transcript(transcript_path, transcript)
+
+    # yt-dlp writes sidecar files to the working directory; clean them up.
+    cleanup_sidecar_files(
+        video_id,
+        (
+            ".info.json",
+            ".live_chat.json",
+            ".vtt",
+            ".srt",
+            ".en.vtt",
+            ".en-orig.vtt",
+            ".en-en.vtt",
+            ".en-de-DE.vtt",
+        ),
+    )
+    for pattern in [f"{video_id}*.vtt", f"{video_id}*.srt"]:
+        for file in Path(".").glob(pattern):
+            try:
+                file.unlink()
+            except OSError:
+                pass
+
 def process_single_video(url, args, output_dir=None, pbar=None, progress_callback=None):
+    """Harvest one video and write outputs.
+
+    The pipeline is:
+    metadata → transcript → (optional) audio → comments → (optional) analysis → save.
+
+    Args:
+        url: YouTube URL or raw 11-character video ID.
+        args: Parsed CLI args.
+        output_dir: Optional base output directory (used for bulk mode).
+        pbar: Optional tqdm progress bar to update the description.
+        progress_callback: Optional callback to update progress text.
+
+    Returns:
+        Tuple `(success, message)` where `message` is human-readable.
+    """
     try:
         video_id = video_id_from_url(url)
     except ValueError as exc:
@@ -148,21 +350,8 @@ def process_single_video(url, args, output_dir=None, pbar=None, progress_callbac
     
     watch_url = build_watch_url(video_id)
     
-    # Determine output directories
-    audio_dir = Path(getattr(args, 'audio_dir', DEFAULT_AUDIO_DIR))
-    structured_dir = Path(getattr(args, 'structured_dir', DEFAULT_STRUCTURED_DIR))
-    transcripts_dir = Path(getattr(args, 'transcripts_dir', DEFAULT_TRANSCRIPTS_DIR))
-    
-    # Override with bulk output dir if provided (creates subdirs within it)
-    if output_dir:
-        audio_dir = output_dir / "audio"
-        structured_dir = output_dir / "structured_outputs"
-        transcripts_dir = output_dir / "transcripts"
-    
-    # Create directories
-    audio_dir.mkdir(parents=True, exist_ok=True)
-    structured_dir.mkdir(parents=True, exist_ok=True)
-    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    audio_dir, structured_dir, transcripts_dir = _resolve_output_dirs(args, output_dir)
+    _ensure_dirs(audio_dir, structured_dir, transcripts_dir)
     
     # Output paths based on VIDEO_ID
     structured_output_path = structured_dir / f"{video_id}.{args.format}"
@@ -171,64 +360,52 @@ def process_single_video(url, args, output_dir=None, pbar=None, progress_callbac
     if pbar: pbar.set_description(f"Processing {video_id}")
 
     try:
-        # 1. Metadata
-        if progress_callback: progress_callback("Fetching metadata...")
+        # 1) Metadata
+        if progress_callback:
+            progress_callback("Fetching metadata...")
         metadata = fetch_metadata(video_id, watch_url)
         
-        # 2. Transcript
-        if progress_callback: progress_callback("Fetching transcript...")
+        # 2) Transcript
+        if progress_callback:
+            progress_callback("Fetching transcript...")
         transcript = fetch_transcript(video_id, watch_url)
         
-        # 3. Audio (enabled by default, use --no-audio to skip)
+        # 3) Audio (optional)
         audio_path = None
-        if not getattr(args, 'no_audio', False):
-            if progress_callback: progress_callback("Downloading audio...")
+        if not getattr(args, "no_audio", False):
+            if progress_callback:
+                progress_callback("Downloading audio...")
             audio_path = download_audio(video_id, watch_url, output_dir=audio_dir)
         
-        # 4. Comments
-        if progress_callback: progress_callback("Fetching comments...")
+        # 4) Comments
+        if progress_callback:
+            progress_callback("Fetching comments...")
         structured_comments = fetch_comments(
-            video_id, 
-            watch_url, 
-            max_dl=args.max_comments, 
-            top_n=args.comments
+            video_id,
+            watch_url,
+            max_dl=args.max_comments,
+            top_n=args.comments,
         )
         
-        # 5. Analysis
-        if progress_callback: progress_callback("Analyzing content...")
-        sentiment = None
-        keywords = None
-        
-        full_text = " ".join(transcript)
-        if not args.no_sentiment:
-            sentiment = analyze_sentiment(full_text)
-        if not args.no_keywords:
-            keywords = extract_keywords(full_text)
+        # 5) Analysis (optional)
+        if progress_callback:
+            progress_callback("Analyzing content...")
+        sentiment, keywords = _analyze_text(args, transcript)
 
-        # 6. Save outputs
-        if progress_callback: progress_callback("Saving outputs...")
-        
-        # Save structured output (metadata + analysis + transcript + comments)
-        if args.format == "json":
-            save_json(structured_output_path, metadata, transcript, structured_comments, sentiment, keywords)
-        else:
-            formatted_comments = format_comments_for_txt(structured_comments)
-            save_txt(structured_output_path, metadata, transcript, formatted_comments, sentiment, keywords)
-        
-        # Save raw transcript only
-        save_raw_transcript(transcript_output_path, transcript)
-        
-        # Cleanup sidecar files
-        cleanup_sidecar_files(video_id, (
-            ".info.json", ".live_chat.json", ".vtt", ".srt", 
-            ".en.vtt", ".en-orig.vtt", ".en-en.vtt", ".en-de-DE.vtt"
-        ))
-        for pattern in [f"{video_id}*.vtt", f"{video_id}*.srt"]:
-            for file in Path(".").glob(pattern):
-                try:
-                    file.unlink()
-                except OSError:
-                    pass
+        # 6) Save outputs + cleanup
+        if progress_callback:
+            progress_callback("Saving outputs...")
+        _save_outputs(
+            args=args,
+            video_id=video_id,
+            structured_path=structured_output_path,
+            transcript_path=transcript_output_path,
+            metadata=metadata,
+            transcript=transcript,
+            comments=structured_comments,
+            sentiment=sentiment,
+            keywords=keywords,
+        )
         
         # Build success message
         outputs = [f"📄 {structured_output_path}", f"📝 {transcript_output_path}"]
@@ -243,11 +420,14 @@ def process_single_video(url, args, output_dir=None, pbar=None, progress_callbac
         return False, f"❌ {video_id}: {exc}"
 
 def main():
+    """CLI entry point.
+
+    Returns:
+        Process exit code (0 for success, non-zero for failure).
+    """
     print(YOUTUBE_HARVESTER_BANNER)
     args = parse_args()
-    config = load_config()
-    
-    # Merge config with args if needed
+    # `parse_args()` already incorporates config defaults (CLI overrides config).
     
     if args.bulk:
         try:

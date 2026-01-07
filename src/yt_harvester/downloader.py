@@ -1,3 +1,11 @@
+"""Network/download layer for `yt_harvester`.
+
+This module is intentionally "best-effort":
+- YouTube endpoints are unreliable and vary by video/region/account
+- We prefer high-quality transcripts when available, but fall back gracefully
+- Some helpers call `yt-dlp`, which writes sidecar files into the working dir
+"""
+
 import json
 import subprocess
 from pathlib import Path
@@ -18,7 +26,19 @@ CommentDict = dict  # {author, text, like_count, timestamp, id, replies}
 StructuredComments = List[CommentDict]
 
 def fetch_metadata(video_id: str, watch_url: str) -> dict:
-    """Fetch video title and channel via yt-dlp; fall back to placeholders."""
+    """Fetch basic and extended metadata for a video.
+
+    Why: metadata is useful for human review and for downstream dataset
+    exploration (e.g., filtering by channel or tags).
+
+    Args:
+        video_id: YouTube video ID (11 characters).
+        watch_url: Canonical watch URL.
+
+    Returns:
+        A dictionary with keys like `Title`, `Channel`, `URL`, and optional
+        fields such as `ViewCount`, `Duration`, and `Tags`.
+    """
     ydl_opts = {"quiet": True, "skip_download": True}
     info = {}
     try:
@@ -50,7 +70,17 @@ def fetch_metadata(video_id: str, watch_url: str) -> dict:
     }
 
 def try_official_transcript(video_id: str) -> List[str]:
-    """Try to fetch official (manual) transcript in any available language."""
+    """Try to fetch an official (human-created) transcript.
+
+    Why: manual transcripts are usually cleaner than auto-generated captions,
+    so we prefer them when they exist.
+
+    Args:
+        video_id: YouTube video ID.
+
+    Returns:
+        A list of merged transcript lines, or an empty list if unavailable.
+    """
     api = YouTubeTranscriptApi()
     
     # First, try preferred languages in order
@@ -75,9 +105,19 @@ def try_official_transcript(video_id: str) -> List[str]:
 
 
 def try_auto_captions(video_id: str, watch_url: str) -> List[str]:
-    """
-    Try to fetch auto-generated captions in the video's original language.
-    Falls back to any available auto-caption if preferred languages aren't available.
+    """Try to fetch auto-generated captions via `yt-dlp` (fallback).
+
+    Why: when the transcript APIs fail, `yt-dlp` can often still download
+    auto-captions as VTT/SRT. This is slower and has side effects (files on disk),
+    but it's a robust fallback.
+
+    Args:
+        video_id: YouTube video ID.
+        watch_url: Canonical watch URL.
+
+    Returns:
+        A list of merged transcript lines. Returns an empty list on "no captions",
+        or a single-line placeholder message when `yt-dlp` is missing.
     """
     output_pattern = f"{video_id}.%(ext)s"
     
@@ -143,7 +183,14 @@ def try_auto_captions(video_id: str, watch_url: str) -> List[str]:
 
 
 def try_auto_transcript_api(video_id: str) -> List[str]:
-    """Try to fetch auto-generated transcript via youtube_transcript_api."""
+    """Try to fetch auto-generated transcript via youtube_transcript_api.
+
+    Args:
+        video_id: YouTube video ID.
+
+    Returns:
+        A list of merged transcript lines, or an empty list if unavailable.
+    """
     api = YouTubeTranscriptApi()
     
     try:
@@ -169,12 +216,18 @@ def try_auto_transcript_api(video_id: str) -> List[str]:
 
 
 def fetch_transcript(video_id: str, watch_url: str) -> List[str]:
-    """
-    Fetch transcript for a video, trying multiple sources:
-    1. Official (manual) transcripts in preferred languages
-    2. Official transcripts in any language
-    3. Auto-generated transcripts via API
-    4. Auto-captions via yt-dlp (fallback)
+    """Fetch transcript using a quality-first fallback chain.
+
+    Why: training labels matter. We try higher-quality sources first, then
+    fall back to whatever we can get so the pipeline remains usable.
+
+    Args:
+        video_id: YouTube video ID.
+        watch_url: Canonical watch URL (used for `yt-dlp` fallback).
+
+    Returns:
+        Transcript lines. If nothing can be fetched, returns a placeholder
+        line like `"(Transcript unavailable.)"`.
     """
     # Try official/manual transcripts first
     official = try_official_transcript(video_id)
@@ -200,8 +253,23 @@ def fetch_comments(
     max_dl: int = 10000, 
     top_n: int = 20
 ) -> StructuredComments:
-    """
-    Fetch comments via yt-dlp and return structured data. Does NOT clean up files - caller must do cleanup.
+    """Fetch top comments and replies via `yt-dlp`.
+
+    Why: comments are not needed for ASR training, but can be useful context
+    for dataset exploration or future tasks (topic/genre clustering).
+
+    Note: `yt-dlp` writes an `.info.json` file into the current working
+    directory. This function does **not** clean it up; the caller should.
+
+    Args:
+        video_id: YouTube video ID.
+        watch_url: Canonical watch URL.
+        max_dl: Maximum number of comments `yt-dlp` is allowed to download.
+        top_n: Number of top-level comments to keep (by like count).
+
+    Returns:
+        A list of structured comment dicts with a limited set of replies.
+        Returns an empty list on failure.
     """
     info_json_path = Path(f"{video_id}.info.json")
     cmd = [
@@ -287,12 +355,15 @@ def download_audio(video_id: str, watch_url: str, output_dir: Optional[Path] = N
     Download audio from a YouTube video and convert to 16kHz mono WAV format (ASR standard).
     
     Args:
-        video_id: YouTube video ID
-        watch_url: Full YouTube watch URL
-        output_dir: Output directory for audio files (default: ./audio)
+        video_id: YouTube video ID.
+        watch_url: Full YouTube watch URL.
+        output_dir: Output directory for audio files (default: `./audio`).
     
     Returns:
-        Path to the saved WAV file, or None if download failed
+        Path to the saved WAV file, or None if the download/conversion failed.
+
+    Why: NeMo Conformer models expect 16kHz mono audio. We standardize here so
+    downstream training doesn't have to handle format drift.
     """
     audio_dir = output_dir or AUDIO_OUTPUT_DIR
     audio_dir.mkdir(parents=True, exist_ok=True)

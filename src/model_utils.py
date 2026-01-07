@@ -11,6 +11,16 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 def _require_torch():
+    """Import guard for optional PyTorch dependency.
+
+    Why: local ETL/harvesting can run without torch; model loading requires it.
+
+    Returns:
+        The imported `torch` module.
+
+    Raises:
+        ModuleNotFoundError: If torch is not installed.
+    """
     if torch is None:  # pragma: no cover
         raise ModuleNotFoundError(
             "PyTorch is required for ASR model loading/benchmarking. "
@@ -20,20 +30,33 @@ def _require_torch():
 
 
 def get_default_device() -> torch.device:
-    """Prefer CUDA when available (e.g., Colab T4), otherwise CPU."""
+    """Choose a reasonable default torch device.
+
+    Why: this repo frequently runs in Colab. If CUDA is available we prefer it,
+    otherwise we fall back to CPU.
+
+    Returns:
+        A `torch.device` instance (`cuda` if available else `cpu`).
+    """
 
     _torch = _require_torch()
     return _torch.device("cuda" if _torch.cuda.is_available() else "cpu")
 
 
 def load_nemo_model(model_ref: str, device: Optional[torch.device] = None):
-    """Load a NeMo ASR model.
+    """Load a NeMo ASR model from disk or from NGC.
 
-    `model_ref` can be either:
-      - A local path to a `.nemo` file (loaded via `restore_from`)
-      - An NGC pretrained model name (loaded via `from_pretrained`)
+    Args:
+        model_ref: Either a local `.nemo` path (restore) or an NGC model name
+            (download via `from_pretrained`).
+        device: Torch device to move the model to. If None, uses
+            `get_default_device()`.
 
-    The returned model is put into eval mode and moved to the requested device.
+    Returns:
+        A NeMo ASR model in eval mode on the requested device.
+
+    Raises:
+        ModuleNotFoundError: If PyTorch is not installed.
     """
 
     _torch = _require_torch()
@@ -55,9 +78,15 @@ def load_nemo_model(model_ref: str, device: Optional[torch.device] = None):
 def _quanto_quantize_in_place(model) -> bool:
     """Attempt to quantize a model in-place using Quanto.
 
-    Returns True if quantization appears to have succeeded.
+    Why: INT8 can reduce memory footprint and improve latency, but quantization
+    support varies across architectures and libraries. This helper is one step
+    in a fallback chain.
 
-    This is a helper so we can implement NeMo-safe fallbacks.
+    Args:
+        model: A PyTorch model to quantize.
+
+    Returns:
+        True if quantization completed without raising.
     """
 
     # Import inside the function so Quanto is only required for int8 mode.
@@ -83,13 +112,16 @@ def _quanto_quantize_in_place(model) -> bool:
 
 
 def _quanto_quantize_linear_layers_in_place(model) -> int:
-    """Try a safer INT8 approach: quantize only `nn.Linear` layers.
+    """Try a safer INT8 approach by quantizing only `nn.Linear` layers.
 
-    NeMo Conformer models contain Conv + attention + normalization stacks.
-    Some Quanto workflows fail when quantizing everything indiscriminately.
+    Why: full-model quantization often fails on NeMo Conformer stacks. Linear-only
+    quantization is a pragmatic compromise that sometimes works.
 
-    This helper attempts to quantize only Linear modules in-place.
-    Returns the number of Linear layers successfully quantized.
+    Args:
+        model: A PyTorch model to quantize in-place.
+
+    Returns:
+        Number of `nn.Linear` submodules successfully quantized.
     """
 
     import torch.nn as nn
@@ -128,21 +160,26 @@ def _quanto_quantize_linear_layers_in_place(model) -> int:
 
 
 def apply_quantization(model, precision: str):
-    """Apply precision/quantization to a NeMo (PyTorch) model.
+    """Apply a precision mode to a NeMo (PyTorch) model.
 
     Supported values:
-      - "float32": no-op
-      - "float16": cast the model to FP16 via `model.half()` (best for Colab T4)
-      - "int8": attempt Quanto INT8 quantization, with NeMo-safe fallbacks
+    - `float32`: no-op
+    - `float16`: cast weights to FP16 (`model.half()`), typically best on Colab T4
+    - `int8`: attempt Quanto INT8 quantization with safe fallbacks
 
-    INT8 notes:
-      1) We first try to quantize the full model.
-      2) If that fails (common with complex NeMo Conformer stacks), we then try
-         to quantize only `nn.Linear` layers.
-      3) If that still fails, we log a warning and fall back to float32.
+    Why the fallbacks: NeMo Conformer models are complex; some INT8 paths fail
+    depending on Quanto/torch versions. We prefer returning a working model over
+    hard-failing.
 
-    The quantization and freeze steps are performed in-place; the model is
-    returned for convenience.
+    Args:
+        model: PyTorch model to modify (in-place for INT8).
+        precision: One of `float32`, `float16`, `int8` (case-insensitive).
+
+    Returns:
+        The (possibly modified) model.
+
+    Raises:
+        ValueError: If `precision` is not a supported value.
     """
 
     precision = (precision or "float32").lower().strip()
