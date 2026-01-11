@@ -30,7 +30,10 @@ dependencies = [
     "youtube-transcript-api",
     "tqdm",
     "textblob",
-    "pyyaml"
+    "pyyaml",
+    "soundfile",
+    "jiwer",
+    "quanto==0.0.11"
 ]
 
 [project.scripts]

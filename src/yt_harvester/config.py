@@ -20,11 +20,16 @@ DEFAULT_CONFIG = {
     },
     "output": {
         "format": "txt",
-        "dir": "."
+        "audio_dir": "./audio",
+        "structured_dir": "./structured_outputs",
+        "transcripts_dir": "./transcripts"
     },
     "processing": {
         "sentiment": True,
         "keywords": True
+    },
+    "runtime": {
+        "workers": 4
     }
 }
 
@@ -70,6 +75,7 @@ def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
         "comments": dict(DEFAULT_CONFIG["comments"]),
         "output": dict(DEFAULT_CONFIG["output"]),
         "processing": dict(DEFAULT_CONFIG["processing"]),
+        "runtime": dict(DEFAULT_CONFIG["runtime"]),
     }
 
     if not path.exists():

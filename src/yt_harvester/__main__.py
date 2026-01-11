@@ -7,6 +7,7 @@ steps (metadata → transcript → audio → comments → analysis → save).
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -29,6 +30,8 @@ from .utils import (
 DEFAULT_AUDIO_DIR = Path("./audio")
 DEFAULT_STRUCTURED_DIR = Path("./structured_outputs")
 DEFAULT_TRANSCRIPTS_DIR = Path("./transcripts")
+
+LOGGER = logging.getLogger(__name__)
 
 YOUTUBE_HARVESTER_BANNER = r"""
 ________________________________________________________________________________
@@ -425,35 +428,36 @@ def main():
     Returns:
         Process exit code (0 for success, non-zero for failure).
     """
-    print(YOUTUBE_HARVESTER_BANNER)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    LOGGER.info(YOUTUBE_HARVESTER_BANNER)
     args = parse_args()
     # `parse_args()` already incorporates config defaults (CLI overrides config).
-    
+
     if args.bulk:
         try:
             with open(args.bulk, "r", encoding="utf-8") as f:
                 links = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
         except Exception as e:
-            print(f"❌ Error reading bulk file: {e}")
+            LOGGER.error("❌ Error reading bulk file: %s", e)
             return 1
-            
+
         if not links:
-            print("⚠️ No links found.")
+            LOGGER.warning("⚠️ No links found.")
             return 1
 
         output_dir = Path(args.bulk_output_dir) if args.bulk_output_dir else None
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"🚀 Processing {len(links)} videos...")
-        
+        LOGGER.info("🚀 Processing %s videos...", len(links))
+
         success_count = 0
         failed_count = 0
-        
-        with ThreadPoolExecutor(max_workers=4) as executor:
+
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
             with tqdm(total=len(links), unit="video") as pbar:
                 futures = {executor.submit(process_single_video, link, args, output_dir, pbar): link for link in links}
-                
+
                 for future in as_completed(futures):
                     success, msg = future.result()
                     if success:
@@ -462,28 +466,31 @@ def main():
                         failed_count += 1
                         tqdm.write(msg)
                     pbar.update(1)
-        
-        print(f"\n📊 Done! Success: {success_count}, Failed: {failed_count}")
+
+        LOGGER.info("\n📊 Done! Success: %s, Failed: %s", success_count, failed_count)
         return 0 if failed_count == 0 else 1
 
-    else:
-        # Single video with detailed progress bar
-        # Steps: metadata, transcript, [audio], comments, analysis, save
-        # Audio is enabled by default, so 6 steps unless --no-audio is used
-        total_steps = 5 if getattr(args, 'no_audio', False) else 6
-        with tqdm(total=total_steps, bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}]") as pbar:
-            def update_progress(desc):
-                pbar.set_description_str(desc)
-                pbar.update(1)
-            
-            success, msg = process_single_video(args.url, args, progress_callback=update_progress)
-            
-            # Ensure bar completes if successful
-            if success and pbar.n < total_steps:
-                pbar.update(total_steps - pbar.n)
-                
-        print(msg)
-        return 0 if success else 1
+    if not args.url:
+        LOGGER.error("❌ No URL provided. Use --bulk or pass a video URL/ID.")
+        return 1
+
+    # Single video with detailed progress bar
+    # Steps: metadata, transcript, [audio], comments, analysis, save
+    # Audio is enabled by default, so 6 steps unless --no-audio is used
+    total_steps = 5 if getattr(args, "no_audio", False) else 6
+    with tqdm(total=total_steps, bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}]") as pbar:
+        def update_progress(desc):
+            pbar.set_description_str(desc)
+            pbar.update(1)
+
+        success, msg = process_single_video(args.url, args, progress_callback=update_progress)
+
+        # Ensure bar completes if successful
+        if success and pbar.n < total_steps:
+            pbar.update(total_steps - pbar.n)
+
+    LOGGER.info(msg)
+    return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main())

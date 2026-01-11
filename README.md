@@ -95,10 +95,10 @@ The local engine (`src/yt_harvester`) covers **Extraction** + **Transformation**
 python -m src.yt_harvester "https://www.youtube.com/watch?v=VIDEO_ID"
 
 # 2. Bulk harvest from a list of links
-python -m src.yt_harvester --bulk links.txt
+python -m src.yt_harvester --bulk links.txt --workers 4
 
 # 3. Generate NeMo Manifests (Training/Validation/Test Split)
-python prepare_data.py
+python prepare_data.py --seed 42
 ```
 
 ### Manifest Generation Strategy (`prepare_data.py`)
@@ -106,8 +106,9 @@ python prepare_data.py
 This script is the **validation layer** before training.
 
 - **Integrity:** Cross-check `.wav` and `.txt`; discard missing/empty transcripts to prevent label noise.
+- **Audio compliance:** Skip non-16kHz mono WAV files before training.
 - **Normalization:** Lowercase + remove punctuation to match the CTC decoder alphabet.
-- **Split:** Randomized 80/10/10 Train/Val/Test.
+- **Split:** Randomized 80/10/10 Train/Val/Test (use `--seed` for deterministic splits).
 
 ---
 

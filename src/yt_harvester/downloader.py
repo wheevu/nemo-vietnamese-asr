@@ -7,13 +7,18 @@ This module is intentionally "best-effort":
 """
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
+
+import soundfile as sf
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from .utils import merge_fragments, clean_caption_lines, cleanup_sidecar_files
+
+LOGGER = logging.getLogger(__name__)
 
 # Preferred transcript languages (will try in order, then fall back to any available)
 PREFERRED_TRANSCRIPT_LANGS = ["vi", "en", "en-US", "en-GB", "en-CA", "en-AU"]
@@ -395,11 +400,26 @@ def download_audio(video_id: str, watch_url: str, output_dir: Optional[Path] = N
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([watch_url])
-        
+
         if output_path.exists():
+            try:
+                info = sf.info(output_path)
+                if info.samplerate != 16000 or info.channels != 1 or info.format.upper() != "WAV":
+                    LOGGER.warning(
+                        "Audio %s is not 16kHz mono WAV (sr=%s, ch=%s, format=%s)",
+                        output_path,
+                        info.samplerate,
+                        info.channels,
+                        info.format,
+                    )
+                    output_path.unlink(missing_ok=True)
+                    return None
+            except RuntimeError as exc:
+                LOGGER.warning("Failed to validate audio %s: %s", output_path, exc)
+                output_path.unlink(missing_ok=True)
+                return None
             return output_path
-        else:
-            return None
+        return None
     except Exception as exc:
         # Clean up any partial downloads
         for partial in audio_dir.glob(f"{video_id}.*"):

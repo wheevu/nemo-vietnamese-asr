@@ -1,8 +1,9 @@
 yt-dlp
 youtube-transcript-api
+tqdm
+textblob
+pyyaml
 soundfile
-
-# ASR benchmarking
 jiwer
 
 # Quantization

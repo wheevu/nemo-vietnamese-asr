@@ -79,11 +79,6 @@ Examples:
         help=f"Maximum total comments to download. Default: {DEFAULT_CONFIG['comments']['max_download']}"
     )
     parser.add_argument(
-        "-o", "--output",
-        metavar="FILE",
-        help="Specify a custom output file name (structured output only)."
-    )
-    parser.add_argument(
         "--bulk",
         metavar="FILE",
         help="Process multiple videos from a file (one URL per line)."
@@ -92,6 +87,13 @@ Examples:
         "--bulk-output-dir",
         metavar="DIR",
         help="Base directory for bulk outputs. Creates audio/, structured_outputs/, transcripts/ subdirs."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(cfg.get("runtime", {}).get("workers", DEFAULT_CONFIG["runtime"]["workers"])),
+        metavar="N",
+        help=f"Max worker threads for bulk mode. Default: {DEFAULT_CONFIG['runtime']['workers']}"
     )
     parser.add_argument(
         "--no-sentiment",

@@ -6,7 +6,9 @@ This script creates train, validation, and test manifest files from
 audio files and their corresponding transcripts.
 """
 
+import argparse
 import json
+import logging
 import os
 import random
 import re
@@ -14,6 +16,8 @@ import string
 from pathlib import Path
 
 import soundfile as sf
+
+LOGGER = logging.getLogger(__name__)
 
 # Directory paths
 AUDIO_DIR = Path("./audio")
@@ -28,6 +32,10 @@ TEST_MANIFEST = "test_manifest.json"
 TRAIN_RATIO = 0.8
 VAL_RATIO = 0.1
 TEST_RATIO = 0.1
+
+# Audio compliance
+TARGET_SAMPLE_RATE = 16000
+TARGET_CHANNELS = 1
 
 
 def normalize_text(text: str) -> str:
@@ -70,6 +78,26 @@ def get_audio_duration(audio_path: Path) -> float:
     return duration
 
 
+def is_audio_compliant(audio_path: Path) -> bool:
+    """Check audio format compliance for NeMo training.
+
+    Args:
+        audio_path: Path to a WAV file.
+
+    Returns:
+        True if audio is 16kHz mono WAV, otherwise False.
+    """
+    try:
+        info = sf.info(audio_path)
+    except RuntimeError:
+        return False
+    return (
+        info.samplerate == TARGET_SAMPLE_RATE
+        and info.channels == TARGET_CHANNELS
+        and info.format.upper() == "WAV"
+    )
+
+
 def create_master_list() -> list:
     """Build a list of valid training samples from local artifacts.
 
@@ -84,21 +112,21 @@ def create_master_list() -> list:
     
     # Ensure directories exist
     if not AUDIO_DIR.exists():
-        print(f"Error: Audio directory '{AUDIO_DIR}' does not exist.")
+        LOGGER.error("Audio directory '%s' does not exist.", AUDIO_DIR)
         return master_list
-    
+
     if not TRANSCRIPTS_DIR.exists():
-        print(f"Error: Transcripts directory '{TRANSCRIPTS_DIR}' does not exist.")
+        LOGGER.error("Transcripts directory '%s' does not exist.", TRANSCRIPTS_DIR)
         return master_list
-    
+
     # Iterate through all .wav files in the audio directory
     wav_files = sorted(AUDIO_DIR.glob("*.wav"))
-    
+
     if not wav_files:
-        print(f"Warning: No .wav files found in '{AUDIO_DIR}'")
+        LOGGER.warning("No .wav files found in '%s'", AUDIO_DIR)
         return master_list
-    
-    print(f"Found {len(wav_files)} audio files. Processing...")
+
+    LOGGER.info("Found %s audio files. Processing...", len(wav_files))
     
     for audio_path in wav_files:
         # Derive base name (e.g., 'video_id_1' from 'video_id_1.wav')
@@ -109,40 +137,44 @@ def create_master_list() -> list:
         
         # Validation: Check if transcript exists
         if not transcript_path.exists():
-            print(f"Warning: Transcript not found for '{base_name}', skipping.")
+            LOGGER.warning("Transcript not found for '%s', skipping.", base_name)
             continue
-        
+
         # Validation: Check if transcript is not empty
         transcript_text = transcript_path.read_text(encoding="utf-8").strip()
         if not transcript_text:
-            print(f"Warning: Transcript is empty for '{base_name}', skipping.")
+            LOGGER.warning("Transcript is empty for '%s', skipping.", base_name)
             continue
-        
+
+        if not is_audio_compliant(audio_path):
+            LOGGER.warning("Audio '%s' is not 16kHz mono WAV, skipping.", base_name)
+            continue
+
         try:
             # Get audio duration
             duration = get_audio_duration(audio_path)
-            
+
             # Normalize the transcript text
             normalized_text = normalize_text(transcript_text)
-            
+
             if not normalized_text:
-                print(f"Warning: Normalized transcript is empty for '{base_name}', skipping.")
+                LOGGER.warning("Normalized transcript is empty for '%s', skipping.", base_name)
                 continue
-            
+
             # Create sample entry with absolute path
             sample = {
                 "audio_filepath": str(audio_path.resolve()),
                 "duration": round(duration, 3),
-                "text": normalized_text
+                "text": normalized_text,
             }
-            
+
             master_list.append(sample)
-            
+
         except Exception as e:
-            print(f"Warning: Error processing '{base_name}': {e}, skipping.")
+            LOGGER.warning("Error processing '%s': %s, skipping.", base_name, e)
             continue
     
-    print(f"Successfully processed {len(master_list)} valid samples.")
+    LOGGER.info("Successfully processed %s valid samples.", len(master_list))
     return master_list
 
 
@@ -182,7 +214,7 @@ def write_manifest(data: list, filepath: str) -> None:
             json_line = json.dumps(entry, ensure_ascii=False)
             f.write(json_line + "\n")
     
-    print(f"Written {len(data)} entries to '{filepath}'")
+    LOGGER.info("Written %s entries to '%s'", len(data), filepath)
 
 
 def main():
@@ -191,53 +223,66 @@ def main():
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
-    print("=" * 60)
-    print("NeMo ASR Data Preparation Script")
-    print("=" * 60)
-    print(f"Audio directory: {AUDIO_DIR.resolve()}")
-    print(f"Transcripts directory: {TRANSCRIPTS_DIR.resolve()}")
-    print()
-    
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    parser = argparse.ArgumentParser(description="Prepare NeMo ASR manifest files.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for deterministic train/val/test split.",
+    )
+    args = parser.parse_args()
+
+    LOGGER.info("%s", "=" * 60)
+    LOGGER.info("NeMo ASR Data Preparation Script")
+    LOGGER.info("%s", "=" * 60)
+    LOGGER.info("Audio directory: %s", AUDIO_DIR.resolve())
+    LOGGER.info("Transcripts directory: %s", TRANSCRIPTS_DIR.resolve())
+
     # Create master list of valid samples
     master_list = create_master_list()
-    
+
     if not master_list:
-        print("Error: No valid samples found. Exiting.")
+        LOGGER.error("No valid samples found. Exiting.")
         return 1
-    
+
     # Shuffle the master list
-    print("\nShuffling data...")
+    if args.seed is not None:
+        random.seed(args.seed)
+        LOGGER.info("Shuffling data with seed %s...", args.seed)
+    else:
+        LOGGER.info("Shuffling data...")
     random.shuffle(master_list)
-    
+
     # Split into train, validation, and test sets
     train_set, val_set, test_set = split_data(master_list)
-    
-    print(f"\nData split:")
-    print(f"  Training:   {len(train_set)} samples ({TRAIN_RATIO*100:.0f}%)")
-    print(f"  Validation: {len(val_set)} samples ({VAL_RATIO*100:.0f}%)")
-    print(f"  Test:       {len(test_set)} samples ({TEST_RATIO*100:.0f}%)")
-    print()
-    
+
+    LOGGER.info("\nData split:")
+    LOGGER.info("  Training:   %s samples (%s%%)", len(train_set), TRAIN_RATIO * 100)
+    LOGGER.info("  Validation: %s samples (%s%%)", len(val_set), VAL_RATIO * 100)
+    LOGGER.info("  Test:       %s samples (%s%%)", len(test_set), TEST_RATIO * 100)
+
     # Write manifest files
     write_manifest(train_set, TRAIN_MANIFEST)
     write_manifest(val_set, VAL_MANIFEST)
     write_manifest(test_set, TEST_MANIFEST)
-    
+
     # Calculate total duration
     total_duration = sum(s["duration"] for s in master_list)
     train_duration = sum(s["duration"] for s in train_set)
     val_duration = sum(s["duration"] for s in val_set)
     test_duration = sum(s["duration"] for s in test_set)
-    
-    print(f"\nTotal audio duration: {total_duration/3600:.2f} hours")
-    print(f"  Training:   {train_duration/3600:.2f} hours")
-    print(f"  Validation: {val_duration/3600:.2f} hours")
-    print(f"  Test:       {test_duration/3600:.2f} hours")
-    
-    print("\n" + "=" * 60)
-    print("Data preparation complete!")
-    print("=" * 60)
-    
+
+    LOGGER.info("\nTotal audio duration: %.2f hours", total_duration / 3600)
+    LOGGER.info("  Training:   %.2f hours", train_duration / 3600)
+    LOGGER.info("  Validation: %.2f hours", val_duration / 3600)
+    LOGGER.info("  Test:       %.2f hours", test_duration / 3600)
+
+    LOGGER.info("\n%s", "=" * 60)
+    LOGGER.info("Data preparation complete!")
+    LOGGER.info("%s", "=" * 60)
+
     return 0
 
 
