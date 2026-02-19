@@ -1,264 +1,159 @@
-# 🎙️ End-to-End Vietnamese ASR Pipeline with NVIDIA NeMo
+# Vietnamese ASR Pipeline with NVIDIA NeMo
 
 [![NeMo](https://img.shields.io/badge/NVIDIA-NeMo-green)](https://github.com/NVIDIA/NeMo)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/wheevu/nemo-vietnamese-asr/blob/main/NVIDIA_NeMo_ASR.ipynb)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Run Tests](https://github.com/wheevu/nemo-vietnamese-asr/actions/workflows/run_tests.yml/badge.svg)](https://github.com/wheevu/nemo-vietnamese-asr/actions/workflows/run_tests.yml)
 
-## 1. Executive Summary
+## 1. Overview
 
-This repository covers **data ingestion + preparation** for Vietnamese ASR and **GPU training / offline evaluation** with **NVIDIA NeMo**. It harvests unstructured YouTube audio/video, runs ETL to build a clean speech corpus, and generates NeMo-compatible manifests for reproducible training.
+I designed this project to build a complete pipeline for creating a Vietnamese speech-to-text dataset and training models using **NVIDIA NeMo**. It downloads raw audio from YouTube, cleans it, and prepares it for high-performance GPU training.
 
-Aligned with NVIDIA’s production mental model, **training and inference serving are separate systems**: training produces model artifacts; inference is delivered via a **GPU-accelerated endpoint** across a service boundary. This repo covers dataset creation, training, and **training-time inference / offline evaluation**; production inference serving (e.g., Riva / NIM-style microservices) is intentionally out of scope.
+I followed **NVIDIA’s production philosophy**: Training and Serving are two different processes.
+*   **This Repo (Training):** Focuses on creating the dataset and building the model artifact.
+*   **Future Scope (Serving):** Running the model in an API (like NVIDIA Riva) is a separate step not covered here.
 
-This separation-of-concerns framing follows the architecture vocabulary in **[NVIDIA’s NIM Microservices coursework](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-FX-23+V1).**
+This separation follows the architecture defined in **[NVIDIA’s NIM Microservices coursework](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-FX-23+V1).**
 
-The workflow supports a common constraint: develop on **Apple Silicon (M1)** and train on **Linux/CUDA** GPUs (cross-platform paths, dependencies, and data validation).
+## 2. How It Works
 
-## 2. System Architecture
-
-Hybrid **Local-to-Cloud** workflow for reproducibility and cost efficiency.
+ This project has a **Local-to-Cloud** workflow. This allows development on a standard laptop (Mac/Windows) while only paying for cloud GPUs when actual training is required.
 
 ![Architecture Diagram](./asset/mermaid-diagram.png)
 
-> - **Local CPU ETL, Cloud GPU training:** Run ETL locally (M1 CPU); reserve paid GPU time for training and **training-time inference / offline evaluation**.
-> - **Transcript quality fallback:** Prefer manual transcripts over auto-generated sources to reduce noisy labels (“training pollution”).
-> - **Segmented evaluation:** Chunk audio into 30s windows to avoid Conformer $O(N^2)$ attention memory blowups and prevent OOM on T4 GPUs.
-
-### Production-Oriented View
-
-- **Inference is a separate service:** a model sits behind an **inference endpoint**; this repo does not implement serving.
-- **Service boundary:** data prep outputs versioned artifacts (audio, transcripts, manifests); training outputs versioned artifacts (checkpoints/configs) for downstream serving systems.
-- **Runtime-agnostic artifacts:** produced for downstream serving, not coupled to any specific runtime.
-- **Offline data prep (local CPU):** `src/yt_harvester` handles ingestion + ETL, transcript fallback, and 16kHz mono WAV standardization.
-- **GPU training (NeMo):** run training on Linux/CUDA GPUs; evaluation is **training-time inference / offline evaluation** (batch transcription + WER).
-- **Decoupled training and serving:** training optimizes for experimentation/throughput; serving optimizes for latency/concurrency/operations.
-- **Client–service interaction (future):** align via a request/response contract (audio → transcript) for a future serving layer.
+1.  **Local Data Prep (CPU):** Doing the "Heavy Lifting" of downloading and processing audio locally.
+2.  **Cloud Training (GPU):** Uploading the clean data to Google Colab to run the actual NeMo training.
+3.  **Strict Validation:** Prioritizing manual transcripts over auto-generated ones to make sure the model learns from high-quality data.
 
 ### Scope & Non-Goals
-
-- No production inference serving (no deployed ASR endpoint / online API).
-- No container runtime or orchestration included.
-- “Inference” here means **training-time inference / offline evaluation**, not serving.
-- Goal: correct architecture (training ≠ serving) and forward-compatible artifacts for a GPU-backed serving stack.
+*   **Goal:** Build a clean dataset and a training pipeline.
+*   **Non-Goal:** No live API endpoint or a web app here.
+*   **Constraint:** Designed to prevent "Out of Memory" (OOM) errors on T4 GPUs by chopping audio into 30-second chunks.
 
 ## 3. Project Structure
 
 ```bash
 nemo-vietnamese-asr/
 ├── src/
-│   └── yt_harvester/           # 📦 Main Python package (Local ETL)
-│       ├── __init__.py         # Public API exports
-│       ├── __main__.py         # Entry point & orchestration
-│       ├── cli.py              # CLI argument parsing
-│       ├── config.py           # YAML configuration management
-│       ├── downloader.py       # YouTube data fetching logic
-│       ├── processor.py        # Text analysis (sentiment, keywords)
-│       └── utils.py            # Helper functions
-├── tests/                      # pytest test suite
-│   ├── conftest.py             # Shared fixtures (mock audio, manifests)
-│   ├── test_text_processing.py # URL parsing, Vietnamese text normalization
-│   └── test_data_integrity.py  # Manifest validation, audio compliance
-├── prepare_data.py             # NeMo manifest generator & validator
-├── benchmark.py                # Precision benchmarking (FP32/FP16/INT8)
-├── audio/                      # Output: 16kHz mono WAV files
-├── transcripts/                # Output: Clean raw transcript text
-├── structured_outputs/         # Output: Full metadata + analysis
-├── train_manifest.json         # NeMo training manifest
-└── NVIDIA_NeMo_ASR.ipynb       # Cloud Notebook (Training/Offline Evaluation)
+│   └── yt_harvester/           # The Tool: Downloads & Cleans Data
+│       ├── __main__.py         # Entry point
+│       ├── downloader.py       # Logic to fetch YouTube video/audio
+│       └── processor.py        # Logic to analyze text (sentiment)
+├── audio/                      # Output: Clean 16kHz WAV files
+├── transcripts/                # Output: Clean text files
+├── prepare_data.py             # Script: Generates NeMo manifest files
+├── benchmark.py                # Script: Tests model speed (FPS/WER)
+├── NVIDIA_NeMo_ASR.ipynb       # Notebook: Run this in Google Colab
+└── tests/                      # Quality Assurance (QA)
 ```
 
-## 4. Component 1: Local Data Engineering
+## 4. Step 1: Local Data Engineering
 
-The local engine (`src/yt_harvester`) handles **extraction + transformation**, turning raw YouTube videos into a structured speech dataset.
+The tool inside `src/yt_harvester` (reused legacy code) turns messy YouTube links into a clean dataset.
 
-### Core Features
+### What it does
+*   **Best Transcript First:** It looks for a human-written transcript. If none exists, it falls back to auto-generated captions.
+*   **Audio Formatting:** It automatically converts audio to **16kHz Mono WAV**, which is the standard required by NeMo models.
+*   **Smart Skipping:** If ran twice, it skips files already downloaded to save time.
 
-- **Smart fallback chain:** `downloader.py` fetches transcripts in quality order:
-  1. Official manual transcripts (Vi/En)
-  2. Auto-generated API transcripts
-  3. Auto-captions via `yt-dlp` CLI
-- **Audio standardization:** Convert streams to **16kHz mono WAV** via FFmpeg.
-- **Idempotency:** Skip existing files to save bandwidth and allow safe re-runs.
-- **Rich metadata:** Extract sentiment polarity and top keywords with `TextBlob` for future downstream tasks.
-
-### CLI Usage
+### How to use it
 
 ```bash
-# 1. Harvest a single video (Audio + Metadata + Transcript)
+# 1. Process a single video
 python -m src.yt_harvester "https://www.youtube.com/watch?v=VIDEO_ID"
 
-# 2. Bulk harvest from a list of links
+# 2. Process a list of videos
 python -m src.yt_harvester --bulk links.txt --workers 4
 
-# 3. Generate NeMo manifests (Training/Validation/Test split)
+# 3. Create the training files (Manifests)
 python prepare_data.py --seed 42
 ```
 
-### Manifest Generation Strategy (`prepare_data.py`)
+### The Validation Layer (`prepare_data.py`)
+Before sending data to the GPU, this script checks the work. It removes empty files, fixes text formatting (lowercase), and splits the data into Train/Test sets (80/10/10).
 
-This script is the **validation layer** before training.
+## 5. Step 2: Cloud Workflow (Google Colab)
 
-- **Integrity:** Cross-check `.wav` and `.txt`; discard missing/empty transcripts to prevent label noise.
-- **Audio compliance:** Skip non-16kHz mono WAV files before training.
-- **Normalization:** Lowercase + remove punctuation to match the CTC decoder alphabet.
-- **Split:** Randomized 80/10/10 Train/Val/Test (use `--seed` for deterministic splits).
-
-
-## 5.  Component 2: Cloud Workflow (Google Colab)
-
-**File:** `NVIDIA_NeMo_ASR.ipynb`
-
-This component handles **model loading** plus **training-time inference / offline evaluation** on NVIDIA GPUs.
+Open `NVIDIA_NeMo_ASR.ipynb` in Google Colab to handle the GPU work.
 
 ### Workflow Logic
+1.  **Load Data:** Unzips the dataset directly to the Colab disk for speed.
+2.  **Load Model:** Downloads the `stt_en_conformer_ctc_large` model from NVIDIA.
+3.  **Evaluate:** Runs the model on the Vietnamese data.
+    *   *Note:* Since I am using an **English** model on **Vietnamese** audio without fine-tuning, the accuracy will be low (high WER). This proves the pipeline works before spending hours fine-tuning.
 
-1. **Persistence:** Mount Drive; unzip to local VM disk (`/content/data`) for fast I/O.
-2. **Model loading:** Use NeMo’s polymorphic `ASRModel` to load `stt_en_conformer_ctc_large` from the **NVIDIA NGC Catalog** (avoids BPE vs char-class mismatch issues).
-3. **Path bridging:** Remap macOS manifest paths (e.g., `/Users/josh/...`) to Colab paths (`/content/data/...`) at runtime.
-4. **Offline evaluation pipeline:** 30s chunking to prevent T4 OOM from Conformer’s $O(N^2)$ attention; decoding guarded for NeMo v2.6.0 signature changes (`paths2audio_files` vs positional args).
+## 6. Results & Analysis
 
-## 6. Results & Evaluation
+I performed a "Zero-shot" test (running the English model on Vietnamese audio).
 
-Validation: **Zero-shot offline evaluation (training-time inference)** with a pre-trained English Conformer on the Vietnamese dataset.
+*   **Result:** The model attempts to map Vietnamese sounds to English words phonetically.
 
-- **Metric:** WER via `jiwer`.
-- **Result:** WER ≈ 1.00 (expected for English-on-Vietnamese, zero-shot).
-- **Qualitative:** Demonstrates **phonetic mapping** (acoustic features are processed sensibly).
+| Original Vietnamese Audio | Model Transcription (English Phonetics) | Analysis |
+| :--- | :--- | :--- |
+| **"Giang Ơi Radio"** | _"the radio"_ | Recognized the English loanword |
+| **"Chào bạn"** | _"ta bak"_ | Acoustic approximation (sounds similar) |
 
-| Original Vietnamese Audio | Model Transcription (English Phonetics) | Analysis                       |
-| :------------------------ | :-------------------------------------- | :----------------------------- |
-| **"Giang Ơi Radio"**      | _"the radio"_                           | ✅ Recognized English loanword |
-| **"Chào bạn"**            | _"ta bak"_                              | ✅ Acoustic approximation      |
-
-**Conclusion:** The pipeline is ready for transfer learning (fine-tuning): freeze the encoder and retrain the decoder on Vietnamese.
+**Conclusion:** The pipeline successfully feeds audio to the model. The next logical step is **Transfer Learning**: freezing the model's "ear" (Encoder) and retraining its "brain" (Decoder) to understand Vietnamese text.
 
 ---
 
-## Production-Ready Model Optimization
+## Optimizing for Speed (Quantization)
 
-This repo includes a production-oriented inference optimization workflow using **quantization** to reduce latency and memory footprint on **Google Colab T4** GPUs.
+To make the model run faster on smaller GPUs (like the free Colab T4), I use **Quantization** (following **[“Quantization Fundamentals with Hugging Face”](https://www.deeplearning.ai/short-courses/quantization-fundamentals-with-hugging-face/)**). This reduces the precision of the math inside the model (from 32-bit floating point to 16-bit) to save memory and increase speed.
 
-This benchmarking + quantization workflow is adapted from concepts in the **[“Quantization Fundamentals with Hugging Face”](https://www.deeplearning.ai/short-courses/quantization-fundamentals-with-hugging-face/)** course, with an emphasis on the practical **accessibility gap**:
-- **Why:** Model sizes can exceed available VRAM (e.g., ~280 GB FP32 weights for a 70B model vs ~80 GB on A100 and ~16 GB on T4).
-- **How:** Reduce footprint via lower-precision types (FP16 is ~2× smaller than FP32; INT8 is ~4× smaller), trading efficiency vs precision.
+### Benchmark Results (Colab T4 GPU)
 
-### Benchmarking (float32 vs float16 vs int8)
+I wrote `benchmark.py` to measure exactly how much faster the optimized model is.
 
-The benchmark script (`benchmark.py`) measures inference latency and WER across different precision settings. It automatically:
-- Crops audio to 30s to avoid Conformer O(N²) OOM.
-- Remaps macOS manifest paths to Colab paths.
-- Handles NeMo API signature differences across versions.
-- Gracefully reports int8 failures (Quanto has known incompatibilities with NeMo Conformer).
+| Precision | Speed (Latency) | VRAM Usage | Notes |
+| :--- | :--- | :--- | :--- |
+| **float32** (Standard) | 151 ms/file | ~731 MB | Baseline speed. |
+| **float16** (Optimized) | **89 ms/file** | ~888 MB | **~40% Faster.** Recommended for T4. |
+| **int8** | N/A | ~166 MB | Currently incompatible with this model type. |
 
-**Run in Colab (Step 8B of the notebook):**
+To run this benchmark yourself in Colab:
 ```bash
-python benchmark.py \
-  --model "/content/drive/MyDrive/Colab Notebooks/nemo_asr_project/vietnamese_asr_v1.nemo" \
-  --manifest /content/data/test_manifest.json \
-  --samples 100 \
-  --audio-root /content/data/audio
+python benchmark.py --model stt_en_conformer_ctc_large --manifest val_manifest.json
 ```
 
-**Or use an NGC pretrained model directly:**
-```bash
-python benchmark.py --model stt_en_conformer_ctc_large --manifest val_manifest.json --samples 100
-```
+## 7. Testing & Quality Assurance
 
-### Results (Colab T4 GPU, Dec 2025)
+Bad data ruins training runs. I included a professional test suite to catch errors *before* they crash the training script. (following **["Testing Machine Learning Systems: Code, Data and Models" by Made With ML](https://madewithml.com/courses/mlops/testing/)**)
 
-| Precision | Avg Latency (ms/file) | WER (%) | VRAM (MB) | Samples | Notes |
-| --- | --- | --- | --- | --- | --- |
-| float32 | 151.54 | 99.89 | 731.29 | 2 | Baseline |
-| float16 | 89.34 | 99.88 | 888.88 | 2 | **~40% faster**, recommended for T4 |
-| int8 | — | — | 166.05 | 0 | Quanto incompatible with NeMo Conformer |
+### What I test
+*   **Text Processing:** Does the code handle YouTube URLs correctly? Does it preserve Vietnamese diacritics (accents)?
+*   **Data Integrity:** Are the audio files actually 16kHz mono? Do the JSON manifests point to real files?
 
-> **Note:** WER ~100% is expected — this is an **English** Conformer model (`stt_en_conformer_ctc_large`) evaluated on **Vietnamese** audio without fine-tuning. The benchmark validates the pipeline, not the model's Vietnamese accuracy.
-
-## 7. Testing
-
-This project includes a professional test suite following best practices from **["Testing Machine Learning Systems: Code, Data and Models" by Made With ML](https://madewithml.com/courses/mlops/testing/)**. The tests validate both code correctness and data integrity — critical for ML pipelines where silent data issues cause training failures.
-
-### Test Categories
-
-| Category | File | Tests | Purpose |
-| :------- | :--- | :---: | :------ |
-| **Text Processing** | `test_text_processing.py` | 42 | YouTube URL parsing, Vietnamese text normalization, diacritic preservation |
-| **Data Integrity** | `test_data_integrity.py` | 19 | NeMo manifest schema, 16kHz mono WAV compliance, file linkage |
-
-### Key Testing Principles Applied
-
-- **Fail fast:** Catch data issues during preparation, not during expensive GPU training.
-- **Fixture-based:** Reusable mock audio files and manifests via `conftest.py`.
-- **Negative testing:** Verify validation catches invalid formats (stereo audio, wrong sample rate).
-- **Vietnamese-specific:** Tests ensure diacritics are preserved (e.g., "Việt" not corrupted to "Viet").
-
-### Running Tests
-
+### How to run tests
 ```bash
 # Run all tests
 pytest tests/ -v
-
-# Run with coverage report
-pytest tests/ --cov=src --cov-report=term-missing
-
-# Run specific test category
-pytest tests/test_data_integrity.py -v
 ```
 
-### Sample Test Output
-
-```
-tests/test_text_processing.py::TestVideoIdFromUrl::test_valid_url_formats[...] PASSED
-tests/test_text_processing.py::TestCleanCaptionLines::test_vietnamese_diacritics_preserved PASSED
+### Example Output
+```text
 tests/test_data_integrity.py::TestAudioFormatCompliance::test_audio_sample_rate_is_16khz PASSED
-tests/test_data_integrity.py::TestManifestAudioLinkage::test_manifest_audio_files_exist PASSED
-========================= 61 passed in 0.34s =========================
+tests/test_text_processing.py::TestCleanCaptionLines::test_vietnamese_diacritics_preserved PASSED
 ```
 
-## 8. CI/CD (GitHub Actions)
+## 8. Continuous Integration (CI)
 
-This repo uses **GitHub Actions** to continuously validate code + data integrity on every change.
+I use **GitHub Actions** to automatically run these tests every time code is pushed. This ensures that a code change doesn't accidentally break the data processing pipeline.
 
-### Workflow Overview
-
-- **Workflow file:** `.github/workflows/run_tests.yml`
-- **Triggers:** `push` and `pull_request` to `main`
-- **Runner:** `ubuntu-latest`
-- **Python:** 3.10 (via `actions/setup-python`)
-
-### What the Pipeline Does
-
-1. **Checkout** the repository.
-2. **Install Linux system deps** (`libsndfile1`) so `soundfile` imports cleanly on Ubuntu.
-3. **Install Python dependencies** needed for the test suite and `src/` imports.
-4. **Run tests:**
-
-```bash
-pytest tests/ -v
-```
-
-### Notes
-
-- This pipeline is **CI-focused** (test + validation). It does not deploy an inference service.
+**Pipeline:** Checkout Code -> Install Audio Libs -> Run `pytest`.
 
 ## Dependencies
 
-- **Local:** `yt-dlp`, `ffmpeg`, `textblob`, `soundfile`, `pandas`
-- **Cloud:** `nemo_toolkit[all]`, `pytorch-lightning`, `jiwer`, `librosa`
-- **Testing:** `pytest`, `pytest-cov`, `numpy`, `soundfile`
+*   **Local:** `yt-dlp` (Downloading), `ffmpeg` (Audio conversion), `textblob` (Analysis), `soundfile`.
+*   **Cloud:** `nemo_toolkit[all]`, `pytorch-lightning`, `jiwer` (Error rate calculation).
+*   **Testing:** `pytest`, `pytest-cov`.
 
-> ### Conclusion & Next Steps
-> 
-> Data processing is validated. WER ~1.00 matches the expected zero-shot failure mode (English model on Vietnamese). Next: **transfer learning**.
-> 
-> **Proposed Fine-Tuning Strategy:**
-> 
-> 1. **Model selection:** Use a smaller pre-trained English model like `stt_en_conformer_ctc_small` from NGC.
-> 2. **Technique:** Freeze the audio **encoder** and fine-tune the language-specific **decoder** on the Vietnamese corpus.
-> 3. **Expectation:** Lower WER within a few epochs, demonstrating a practical path to Vietnamese ASR with modest compute.
-> 
-> **Future Work:**
-> 
-> - Develop a custom Vietnamese character-based tokenizer to replace the English BPE tokenizer for improved accuracy.
-> - Perform detailed error analysis on the fine-tuned model to identify common phonetic failure points (e.g., tonal mistakes, loanwords).
+---
+
+> ### Future Work: Fine-Tuning Strategy
+>
+> Now that the pipeline is validated, the next steps for high-accuracy Vietnamese ASR are:
+>
+> 1.  **Select Model:** Switch to `stt_en_conformer_ctc_small` for faster training.
+> 2.  **Fine-Tune:** Freeze the Encoder, retrain the Decoder on the Vietnamese corpus.
+> 3.  **Tokenizer:** Replace the English tokenizer with a Vietnamese character-based tokenizer.
