@@ -5,19 +5,46 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Run Tests](https://github.com/wheevu/nemo-vietnamese-asr/actions/workflows/run_tests.yml/badge.svg)](https://github.com/wheevu/nemo-vietnamese-asr/actions/workflows/run_tests.yml)
 
-## 1. Overview
+Pipeline for harvesting, validating, and training Vietnamese ASR models with NVIDIA NeMo.
 
-I designed this project to build a complete pipeline for creating a Vietnamese speech-to-text dataset and training models using **NVIDIA NeMo**. It downloads raw audio from YouTube, cleans it, and prepares it for high-performance GPU training.
-
-I followed **NVIDIA’s production philosophy**: Training and Serving are two different processes.
-*   **This Repo (Training):** Focuses on creating the dataset and building the model artifact.
-*   **Future Scope (Serving):** Running the model in an API (like NVIDIA Riva) is a separate step not covered here.
-
+This repo focuses on data preparation, validation, and training.
+Serving an ASR model in production is a separate step. 
 This separation follows the architecture defined in **[NVIDIA’s NIM Microservices coursework](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-FX-23+V1).**
 
-## 2. How It Works
+## What it does
 
- This project has a **Local-to-Cloud** workflow. This allows development on a standard laptop (Mac/Windows) while only paying for cloud GPUs when actual training is required.
+- collects Vietnamese speech data from YouTube
+- prepares clean audio + transcripts for training
+- generates NeMo-ready manifests
+- benchmarks inference and validates the pipeline before fine-tuning
+
+## Stack
+
+- **NVIDIA NeMo** for ASR training
+- **PyTorch** for model execution
+- **yt-dlp + ffmpeg** for audio collection and conversion
+- **pytest + GitHub Actions** for validation
+
+## Quick Start
+
+```bash
+git clone https://github.com/wheevu/nemo-vietnamese-asr
+cd nemo-vietnamese-asr
+pip install -r requirements.txt
+python -m src.yt_harvester --bulk links.txt --workers 4
+python prepare_data.py --seed 42
+```
+
+# Training
+Run the notebook in Colab for GPU training: `NVIDIA_NeMo_ASR.ipynb`
+
+# License
+MIT
+
+<details>
+<summary><strong>Deep dive</strong></summary>
+
+This project has a **Local-to-Cloud** workflow. This allows development on a standard laptop (Mac/Windows) while only paying for cloud GPUs when actual training is required.
 
 ![Architecture Diagram](./asset/mermaid-diagram.png)
 
@@ -30,7 +57,7 @@ This separation follows the architecture defined in **[NVIDIA’s NIM Microservi
 *   **Non-Goal:** No live API endpoint or a web app here.
 *   **Constraint:** Designed to prevent "Out of Memory" (OOM) errors on T4 GPUs by chopping audio into 30-second chunks.
 
-## 3. Project Structure
+## Project Structure
 
 ```bash
 nemo-vietnamese-asr/
@@ -47,7 +74,7 @@ nemo-vietnamese-asr/
 └── tests/                      # Quality Assurance (QA)
 ```
 
-## 4. Step 1: Local Data Engineering
+## Step 1: Local Data Engineering
 
 The tool inside `src/yt_harvester` (reused legacy code) turns messy YouTube links into a clean dataset.
 
@@ -72,7 +99,7 @@ python prepare_data.py --seed 42
 ### The Validation Layer (`prepare_data.py`)
 Before sending data to the GPU, this script checks the work. It removes empty files, fixes text formatting (lowercase), and splits the data into Train/Test sets (80/10/10).
 
-## 5. Step 2: Cloud Workflow (Google Colab)
+## Step 2: Cloud Workflow (Google Colab)
 
 Open `NVIDIA_NeMo_ASR.ipynb` in Google Colab to handle the GPU work.
 
@@ -82,7 +109,7 @@ Open `NVIDIA_NeMo_ASR.ipynb` in Google Colab to handle the GPU work.
 3.  **Evaluate:** Runs the model on the Vietnamese data.
     *   *Note:* Since I am using an **English** model on **Vietnamese** audio without fine-tuning, the accuracy will be low (high WER). This proves the pipeline works before spending hours fine-tuning.
 
-## 6. Results & Analysis
+## Results & Analysis
 
 I performed a "Zero-shot" test (running the English model on Vietnamese audio).
 
@@ -116,7 +143,7 @@ To run this benchmark yourself in Colab:
 python benchmark.py --model stt_en_conformer_ctc_large --manifest val_manifest.json
 ```
 
-## 7. Testing & Quality Assurance
+## Testing & Quality Assurance
 
 Bad data ruins training runs. I included a professional test suite to catch errors *before* they crash the training script. (following **["Testing Machine Learning Systems: Code, Data and Models" by Made With ML](https://madewithml.com/courses/mlops/testing/)**)
 
@@ -136,7 +163,7 @@ tests/test_data_integrity.py::TestAudioFormatCompliance::test_audio_sample_rate_
 tests/test_text_processing.py::TestCleanCaptionLines::test_vietnamese_diacritics_preserved PASSED
 ```
 
-## 8. Continuous Integration (CI)
+## Continuous Integration (CI)
 
 I use **GitHub Actions** to automatically run these tests every time code is pushed. This ensures that a code change doesn't accidentally break the data processing pipeline.
 
@@ -157,3 +184,5 @@ I use **GitHub Actions** to automatically run these tests every time code is pus
 > 1.  **Select Model:** Switch to `stt_en_conformer_ctc_small` for faster training.
 > 2.  **Fine-Tune:** Freeze the Encoder, retrain the Decoder on the Vietnamese corpus.
 > 3.  **Tokenizer:** Replace the English tokenizer with a Vietnamese character-based tokenizer.
+
+</details>
