@@ -9,6 +9,17 @@ A local-to-Colab pipeline for collecting Vietnamese speech, validating the datas
 The laptop handles YouTube collection, audio conversion, transcript selection, manifests, and tests.
 Colab handles the GPU training work.
 
+## Measured on a Colab T4
+
+| Precision | Latency per file | VRAM | Result |
+| --- | ---: | ---: | --- |
+| float32 | 151 ms | about 731 MB | baseline |
+| float16 | 89 ms | about 888 MB | about 40% faster |
+| int8 | unavailable | about 166 MB | incompatible with this model type |
+
+The benchmark uses `stt_en_conformer_ctc_large` and the validation manifest.
+It measures this explicit Colab run, not Vietnamese recognition quality.
+
 ## Project boundary
 
 - Prepare 16 kHz mono audio and Vietnamese transcripts
